@@ -790,5 +790,20 @@ if (!hosted) {
   history.pushState({ wzGuard: 1 }, '', location.href);
   addEventListener('popstate', () => { window.__wizardCloseOverlay(); history.pushState({ wzGuard: 1 }, '', location.href); });
 }
-showTab(); refresh();
+showTab(); refresh().then(openFromLink);
+
+/* Deep link from the Wizard inbox (Chats): #tx=<source>:<id> opens that transaction's sheet on Review. */
+async function openFromLink() {
+  const m = /^#tx=([^:]+):(.+)$/.exec(location.hash || '');
+  if (!m) return;
+  try { history.replaceState(history.state, '', location.pathname + location.search); } catch (e) {}
+  try {
+    const r = await api('api/transactions?' + new URLSearchParams({ source: decodeURIComponent(m[1]), id: decodeURIComponent(m[2]), hidden: 'true', limit: 1 }));
+    const t = r.transactions && r.transactions[0];
+    if (!t) { say('That transaction is no longer here.', 'note'); return; }
+    if (tab !== 'review') { tab = 'review'; showTab(); refresh(); }
+    openSheet(t);
+  } catch (e) { say(e.message, 'error'); }
+}
+addEventListener('hashchange', openFromLink);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });

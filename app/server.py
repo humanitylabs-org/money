@@ -18,12 +18,12 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'money'
-VERSION = '0.13.1'
+VERSION = '0.14.0'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
 SYNC_MINUTES = float(os.environ.get('MONEY_SYNC_MINUTES', '30'))
@@ -717,6 +717,8 @@ def transactions(args, c=None):
         if args.get('account'):
             v = str(args['account'])[:60]
             q.append('AND (t.account=? OR a.last_four=? OR a.name LIKE ?)'); p += [v, v, '%' + v + '%']
+        if args.get('source') and args.get('id'):   # one transaction (the inbox feed's open link)
+            q.append('AND t.source=? AND t.id=?'); p += [str(args['source'])[:40], str(args['id'])[:200]]
         if args.get('reviewed') in (True, False, 'true', 'false'):
             q.append('AND COALESCE(e.reviewed,0)=?'); p.append(1 if args['reviewed'] in (True, 'true') else 0)
         if str(args.get('hidden')) not in ('true', 'True'):
@@ -1352,6 +1354,42 @@ def attention(c, src, allaccts, visible):
     return out
 
 
+INBOX_MAX = 200
+
+
+def _amount_text(amount, currency=None):
+    a = amount or 0
+    sign = '\u2212' if a < 0 else '+' if a > 0 else ''
+    cur = (currency or 'USD').upper()
+    return f"{sign}{'$' if cur == 'USD' else cur + ' '}{abs(a):,.2f}"
+
+
+def inbox():
+    """Wizard OS inbox feed v1: one item per transaction waiting for review, exactly what the app badge
+    (overview to_review) counts. Read-only. Reviewing a transaction in Money drops it from the feed."""
+    c = db()
+    try:
+        rows = [r for r in transactions({'limit': 1, 'all': True}, c)['rows'] if not r['reviewed']]
+        cur = {(a['id']): a['currency'] for a in c.execute('SELECT id,currency FROM accounts')}
+    finally:
+        c.close()
+    items = []
+    for r in rows[:INBOX_MAX]:
+        try:
+            when = int(dt.datetime.combine(dt.date.fromisoformat(str(r['date'])[:10]), dt.time(12), dt.timezone.utc).timestamp())
+        except ValueError:
+            when = 0
+        name = r.get('account_name') or ''
+        l4 = r.get('last_four') or (re.findall(r'(\d{4})\)?\s*$', name) or [''])[0]
+        acct = re.sub(r'\s{2,}', ' ', re.sub(r'\s*(?:X{2,}|\*{2})\d{4}\b', '', re.sub(r'\s*\((?:\.{0,3}|X+)\d{4,5}\)\s*$', '', name))).strip()
+        bits = [_amount_text(r['amount'], cur.get(r['account'])), (acct + (f' ··{l4[-4:]}' if l4 and l4[-4:] not in acct else '')).strip(),
+                r['category'] or 'Uncategorized', 'pending' if r.get('status') == 'pending' else None]
+        items.append({'key': f"tx:{r['source']}:{r['id']}", 'title': (r['merchant'] or r['description'] or 'Transaction')[:200],
+                      'text': ' · '.join(b for b in bits if b)[:2000], 'time': when, 'priority': 3,
+                      'open': '#tx=' + quote(r['source'], safe='') + ':' + quote(str(r['id']), safe='')})
+    return {'inbox': 1, 'items': items, 'total': len(rows)}
+
+
 def overview():
     srcs = sources()
     c = db()
@@ -1514,6 +1552,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {'ok': True, 'app': APP_ID, 'version': VERSION})
             if path == '/api/overview':
                 return self.send(200, overview())
+            if path == '/api/inbox':
+                return self.send(200, inbox())
             if path == '/api/transactions':
                 return self.send(200, transactions(q))
             if path == '/api/networth':
