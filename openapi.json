@@ -1,6 +1,6 @@
 {
   "openapi": "3.0.3",
-  "info": {"title": "Money", "version": "0.16.3"},
+  "info": {"title": "Money", "version": "0.16.4"},
   "paths": {
     "/healthz": {"get": {"summary": "Health", "responses": {"200": {"description": "{ok,app,version}"}}}},
     "/api/inbox": {"get": {"summary": "Wizard OS inbox feed v1: one item per transaction waiting for review (the app badge count); open = #tx=<source>:<id>", "responses": {"200": {"description": "{inbox: 1, items: [{key, title, text, time, priority, open}], total}"}}}},

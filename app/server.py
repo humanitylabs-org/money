@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'money'
-VERSION = '0.16.3'
+VERSION = '0.16.4'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
 SYNC_MINUTES = float(os.environ.get('MONEY_SYNC_MINUTES', '30'))
@@ -819,10 +819,12 @@ def reply_context(args):
         t = rows[0]
         cur = None   # Money's amounts are dollars, as everywhere else in the app
         name = t.get('merchant') or t.get('description') or 'Transaction'
-        acct = ' '.join(x for x in (t.get('institution'), t.get('account_name'), f"…{t['last_four']}" if t.get('last_four') else None) if x)
-        lines = [f"Money transaction: {name} (source {t['source']}, id {t['id']})",
-                 f"{_amount_text(t.get('amount'), cur)} on {t.get('date')}" + (f' from {acct}' if acct else '')
+        inst, an, l4 = t.get('institution') or '', t.get('account_name') or '', t.get('last_four') or ''
+        acct = ' '.join(x for x in (inst if inst.lower() not in an.lower() else '', an, f'…{l4}' if l4 and l4 not in an else '') if x)
+        lines = [f"Money transaction: {name}, {_amount_text(t.get('amount'), cur)} on {t.get('date')}"
                  + (' (pending, may still change)' if t.get('status') == 'pending' else '') + '.']
+        if acct:
+            lines.append(f'Card/account: {acct}')
         if t.get('description') and t.get('description') != name:
             lines.append(f"Bank description: {t['description'][:200]}")
         came = {'you': 'set by Miguel', 'rule': 'from a rule', 'bank': "the bank's", 'monarch': "Monarch's pick",
@@ -840,7 +842,7 @@ def reply_context(args):
         if others:
             lines.append(f'\nOther recent {name} transactions:')
             lines += [f"- {r['date']}: {_amount_text(r.get('amount'), cur)}, {r.get('category') or 'Uncategorized'}" for r in others]
-        lines.append(f"\nTo change it, use money_update with source {t['source']!r} and id {t['id']!r}, only when Miguel asks.")
+        lines.append(f"\nIn Money: source {t['source']!r}, id {t['id']!r}. Change it with money_update only when Miguel asks.")
         return {'id': _draft_id('tx', f"{t['source']}-{t['id']}"), 'title': f'Money: {name}'[:200], 'message': '\n'.join(lines)[:32000]}
     finally:
         c.close()
