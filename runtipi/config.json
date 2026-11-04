@@ -11,7 +11,7 @@
   ],
   "description": "A simple money app over your bank connection (SimpleFIN by default). Review transactions, set categories, names, notes and rules, and see spending by category. Your edits stay in Money's own database and never change the bank's data.",
   "tipi_version": 6,
-  "version": "0.16.3",
+  "version": "0.16.4",
   "source": "https://github.com/oscarhenrycollins/money",
   "exposable": false,
   "supported_architectures": [
@@ -19,7 +19,7 @@
     "arm64"
   ],
   "created_at": 1792600000000,
-  "updated_at": 1793790682517,
+  "updated_at": 1793790888112,
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
   "uid": 1000,

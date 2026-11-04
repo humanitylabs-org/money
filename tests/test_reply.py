@@ -31,7 +31,7 @@ class ReplyContextTests(unittest.TestCase):
         self.assertEqual(r['id'], 'tx-wizard-simplefin-TRN-1')
         self.assertEqual(r['title'], 'Money: Blue Bottle')
         msg = r['message']
-        for want in ('Blue Bottle', '\u2212$42.50', 'Chase Sapphire', '1234', 'pending', 'Coffee', 'meeting with Paul',
+        for want in ('Blue Bottle', '\u2212$42.50', 'Chase Sapphire …1234', 'pending', 'Coffee', 'meeting with Paul',
                      'waiting for review', 'SQ *BLUE BOTTLE', 'money_update', 'TRN-1'):
             self.assertIn(want, msg)
         self.assertIn('\u2212$40.00', msg)   # an earlier charge at the same merchant
