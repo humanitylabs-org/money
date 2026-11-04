@@ -8,6 +8,7 @@ sync never overwrites the owner's edits.
 Stdlib only. Reads connectors over the box's private app network; offers the same data to the agent through MCP.
 """
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -23,7 +24,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'money'
-VERSION = '0.16.2'
+VERSION = '0.16.3'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
 SYNC_MINUTES = float(os.environ.get('MONEY_SYNC_MINUTES', '30'))
@@ -795,6 +796,54 @@ def transactions(args, c=None):
     finally:
         if own:
             c.close()
+
+
+def _draft_id(prefix, raw):
+    """A Chats draft id ([A-Za-z0-9_-], <=128): readable when the bank's id already fits, else a stable hash."""
+    raw = str(raw)
+    if re.fullmatch(r'[A-Za-z0-9_-]{1,100}', raw):
+        return f'{prefix}-{raw}'
+    return f'{prefix}-{hashlib.sha1(raw.encode()).hexdigest()[:20]}'
+
+
+def reply_context(args):
+    """One transaction as reference data for a Chats draft (Reply). Nothing is sent by the app."""
+    src, tid = str(args.get('source') or '')[:40], str(args.get('id') or '')[:200]
+    if not src or not tid:
+        raise Problem(400, 'Pass source and id.')
+    c = db()
+    try:
+        rows = transactions({'source': src, 'id': tid, 'hidden': 'true', 'limit': 1}, c)['transactions']
+        if not rows:
+            raise Problem(404, 'No such transaction.')
+        t = rows[0]
+        cur = None   # Money's amounts are dollars, as everywhere else in the app
+        name = t.get('merchant') or t.get('description') or 'Transaction'
+        acct = ' '.join(x for x in (t.get('institution'), t.get('account_name'), f"…{t['last_four']}" if t.get('last_four') else None) if x)
+        lines = [f"Money transaction: {name} (source {t['source']}, id {t['id']})",
+                 f"{_amount_text(t.get('amount'), cur)} on {t.get('date')}" + (f' from {acct}' if acct else '')
+                 + (' (pending, may still change)' if t.get('status') == 'pending' else '') + '.']
+        if t.get('description') and t.get('description') != name:
+            lines.append(f"Bank description: {t['description'][:200]}")
+        came = {'you': 'set by Miguel', 'rule': 'from a rule', 'bank': "the bank's", 'monarch': "Monarch's pick",
+                'payment': 'card payment', 'memory': 'what he used before', 'common': 'common merchant guess'}
+        if t.get('splits'):
+            lines.append('Split: ' + '; '.join(f"{x['category']} {_amount_text(x['amount'], cur)}" for x in t['splits']))
+        else:
+            lines.append(f"Category: {t.get('category') or 'Uncategorized'}" + (f" ({came.get(t.get('category_from'), t.get('category_from'))})" if t.get('category') else ''))
+        lines.append('Status: ' + ', '.join(x for x in ('reviewed' if t.get('reviewed') else 'waiting for review',
+                                                         'hidden from lists and totals' if t.get('hidden') else None) if x))
+        if t.get('note'):
+            lines.append(f"Note: {t['note'][:300]}")
+        others = [r for r in transactions({'search': name[:40], 'limit': 8}, c)['transactions']
+                  if not (r['source'] == t['source'] and r['id'] == t['id']) and (r.get('merchant') or '') == name][:5]
+        if others:
+            lines.append(f'\nOther recent {name} transactions:')
+            lines += [f"- {r['date']}: {_amount_text(r.get('amount'), cur)}, {r.get('category') or 'Uncategorized'}" for r in others]
+        lines.append(f"\nTo change it, use money_update with source {t['source']!r} and id {t['id']!r}, only when Miguel asks.")
+        return {'id': _draft_id('tx', f"{t['source']}-{t['id']}"), 'title': f'Money: {name}'[:200], 'message': '\n'.join(lines)[:32000]}
+    finally:
+        c.close()
 
 
 def update(body):
@@ -1726,6 +1775,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, inbox())
             if path == '/api/transactions':
                 return self.send(200, transactions(q))
+            if path == '/api/transactions/context':
+                return self.send(200, reply_context(q))
             if path == '/api/networth':
                 return self.send(200, networth())
             if path == '/api/spending':

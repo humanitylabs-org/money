@@ -4,7 +4,7 @@ id: money
 name: Money
 type: view
 category: app
-version: 0.16.2
+version: 0.16.3
 summary: Review transactions, set categories and rules, and see spending and net worth over your bank connection.
 tags: [finance]
 license: GPL-3.0-only
@@ -43,3 +43,5 @@ A simple money app over your bank connection. Review new transactions with one t
 Add manual accounts for things no bank sees, like a cold-storage Bitcoin wallet (enter the BTC amount; it's valued at the live price). Bring over past history from another money app once, and every row says where it came from.
 
 Money reads from a bank-connection app on your box: SimpleFIN by default, or Monarch or Teller if you have those. It never changes the bank's data. Your reviews, categories, names, notes and rules live in Money's own database, so a fresh sync never overwrites them, and switching connections keeps each connection's edits.
+
+Reply: open a transaction (or an alert at the top) and tap Reply to start a new chat with your agent about it. It opens an unsent Chats draft with the item attached; Money never sends anything.
