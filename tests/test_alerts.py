@@ -171,6 +171,14 @@ class AlertTests(unittest.TestCase):
         finally:
             srv.shutdown()
 
+    def test_open_link_prefers_the_listed_shell_port_over_a_bare_host(self):
+        os.environ['WIZARD_TRUSTED_ORIGINS'] = 'https://box.ts.net,https://box.ts.net:8444,https://box.ts.net:8796'
+        try:
+            self.assertEqual(self.m._open_link(), 'https://box.ts.net:8444/wizard-os-home/?open=money')
+        finally:
+            os.environ.pop('WIZARD_TRUSTED_ORIGINS')
+        self.assertEqual(self.m._open_link(), '')
+
     def test_mcp_lists_and_runs_money_alerts(self):
         names = [t['name'] for t in self.m.TOOLS]
         self.assertIn('money_alerts', names)
