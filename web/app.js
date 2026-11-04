@@ -667,14 +667,18 @@ function renderAccounts() {
     card_.append(hd);
     const ul = h('ul', 'mn-accts');
     for (const a of [...list].sort((x, y) => Math.abs(y.balance || 0) - Math.abs(x.balance || 0))) {
-      const li = h('li', 'mn-tap'); li.tabIndex = 0; li.title = 'Tap to leave this account out of Money';
+      const li = h('li', 'mn-tap'); li.tabIndex = 0; li.title = 'Leave this account out of Money';
       li.onclick = async () => {
         if (!(await ask(`Leave ${a.name} out of Money? It disappears from transactions, spending and net worth. You can bring it back at the bottom of this tab.`, 'Leave it out'))) return;
         try { ov = await api('api/accounts/hide', { account: a.id, hidden: true }); say(`${a.name} hidden.`, 'note'); refresh(); } catch (e) { say(e.message, 'error'); }
       };
+      // A visible control for the same action (never tap-the-row only)
+      const off = h('button', 'mn-off'); off.type = 'button'; off.setAttribute('aria-label', `Leave ${a.name} out of Money`); off.title = 'Leave out of Money';
+      off.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18 M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-3.2 4.3 M6.6 6.6A13 13 0 0 0 2 12c1 2.5 5 7 10 7a10 10 0 0 0 4.4-1 M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+      off.onclick = (e) => { e.stopPropagation(); li.onclick(); };
       const b = a.balance || 0;
       const n = h('span', 'mn-row-n'); n.append(h('b', '', shortAcct(a.name)), h('small', '', [a.last_four ? '•• ' + a.last_four : null, /credit|card|sapphire|freedom|bonvoy|aspire|platinum/i.test((a.type || '') + ' ' + a.name) ? 'Card' : /saving/i.test(a.name) ? 'Savings' : /check|ckg/i.test(a.name) ? 'Checking' : /crypto/i.test(a.name) ? 'Crypto' : /invest|brokerage|ira|401/i.test(a.name) ? 'Investing' : 'Account'].filter(Boolean).join(' · ')));
-      li.append(card({ institution: a.institution, account_name: a.name, last_four: a.last_four }), n, h('span', 'mn-amt' + (b > 0.004 ? ' pos' : b < -0.004 ? ' neg' : ' zero'), money(a.balance, a.currency))); ul.append(li);
+      li.append(card({ institution: a.institution, account_name: a.name, last_four: a.last_four }), n, h('span', 'mn-amt' + (b > 0.004 ? ' pos' : b < -0.004 ? ' neg' : ' zero'), money(a.balance, a.currency)), off); ul.append(li);
     }
     card_.append(ul); box.append(card_);
   }
@@ -705,9 +709,9 @@ function renderAccounts() {
     card.append(ul); hs.append(card);
   }
   if (ov.history) {
-    hs.append(h('h3', 'mn-sec', ''));
-    hs.firstChild.append(h('span', 'mn-tag import', 'History'), ` Imported from ${ov.history.from_name}`);
-    hs.append(h('p', 'mn-small mn-pad', `Read-only copy from ${day(ov.history.from)}, ${ov.history.showing.toLocaleString()} transactions showing. It stops for each account where ${ov.source_name}'s own data begins, so nothing shows twice.`));
+    const hh = h('h3', 'mn-sec', ''); hs.append(hh);
+    hh.append(h('span', 'mn-tag import', 'History'), ` Imported from ${ov.history.from_name}`);
+    hs.append(h('p', 'mn-small mn-pad', `${ov.history.showing.toLocaleString()} past transactions from ${day(ov.history.from)}, kept for reference. Each account switches to ${ov.source_name} where its own data begins, so nothing shows twice.`));
   }
   const src = el('sources'); src.replaceChildren();
   for (const s of ov.sources) {
