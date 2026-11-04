@@ -739,3 +739,23 @@ html.wz-hosted .mn-tabs { padding: 3px 6px; }
 @container wz-app (max-width: 430px) { .mn-tabs svg { display: none; } }
 /* The selected pill hugs its label on wide windows instead of filling a quarter of the bar */
 .mn-tabs button::before { inset: 5px max(1px, calc(50% - 64px)); }
+
+/* ================= 0.16.1 friendliness pass (Miguel: "extremely friendly, easy, mobile friendly") =================
+ * Readable green/amber text on light skins, a visible "leave out" control on every bank account,
+ * and 44px thumb targets for every control on touch screens. Kit roles only. */
+[hidden] { display: none !important; }
+/* Light skins: the kit's success/warning roles are pastel, so money figures in them washed out on light glass.
+ * Pull them toward the ink so they keep their colour and read like text. Dark skins are unchanged. */
+html[data-color-scheme="light"] { --pos: color-mix(in oklch, var(--wz-success, var(--accent)) 46%, var(--ink)); --warn: color-mix(in oklch, var(--wz-warning, var(--danger)) 60%, var(--ink)); }
+/* Leave an account out: a visible button on each bank account row (the row tap still works) */
+.mn-off { flex: none; display: grid; place-items: center; width: 30px; height: 30px; margin: 0 -4px 0 -6px; padding: 0; border: 0; border-radius: 8px; color: var(--ink-3); background: none; cursor: pointer; }
+.mn-off svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+@media (hover: hover) { .mn-off:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); } }
+/* Touch screens: every control a thumb can hit (44px), including the compact chips, tiles and folds */
+@media (pointer: coarse) {
+  .mn-thc, .mn-chip, .mn-active .mn-chip, .mn-range .mn-chip, .mn-btn, .mn-sm, .mn-catlist button, .mn-mi, .mn-mseg .mn-mi, .mn-rowcat, .mn-fold summary, .mn-src { min-height: 44px; }
+  .mn-tile { min-height: 44px; align-items: center; }
+  .mn-month .mn-btn { width: 44px; min-height: 44px; }
+  .mn-off { width: 44px; height: 44px; margin: -6px -8px -6px -8px; }
+  .mn-src input { width: 22px; height: 22px; }
+}
