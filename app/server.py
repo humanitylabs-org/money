@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'money'
-VERSION = '0.16.0'
+VERSION = '0.16.1'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
 SYNC_MINUTES = float(os.environ.get('MONEY_SYNC_MINUTES', '30'))
@@ -1409,8 +1409,11 @@ def alert_settings(c):
 
 
 def _open_link():
-    o = next((o for o in sorted(TRUSTED_ORIGINS) if o.startswith('https://')), '')
-    return o + '/wizard-os-home/?open=money' if o else ''
+    # The owner's own first listed shell origin (env order: the box lists its main shell first); a bare https host
+    # with no port is the last resort, since the shell usually lives on its own port.
+    listed = [x.strip() for x in os.environ.get('WIZARD_TRUSTED_ORIGINS', '').split(',') if x.strip().startswith('https://')]
+    listed.sort(key=lambda o: urlsplit(o).port is None)
+    return listed[0].rstrip('/') + '/wizard-os-home/?open=money' if listed else ''
 
 
 def notify_owner(title, message, priority='default', tags=''):
