@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'money'
-VERSION = '0.15.0'
+VERSION = '0.16.0'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
 SYNC_MINUTES = float(os.environ.get('MONEY_SYNC_MINUTES', '30'))
@@ -314,6 +314,7 @@ def _scheduler():
             if age > SYNC_MINUTES * 60 and not SYNCING.is_set():
                 sync()
                 networth()
+                check_alerts()
         except Exception:  # noqa: BLE001 - keep scheduling after a failed sync
             pass
         time.sleep(60)
@@ -1390,6 +1391,167 @@ def inbox():
     return {'inbox': 1, 'items': items, 'total': len(rows)}
 
 
+# ---------------- alerts ----------------
+# Money tells the owner itself (no agent): a bank that needs him (signed out, stopped updating, Money can't refresh)
+# and charges at or above his "large" size. Sent through the box's Notifications app when it is installed; a
+# problem goes out as "needs you" (Notifications puts it where he will see it), a large charge follows Money's own
+# notification choice. Each problem once, again after ALERT_REMIND_DAYS if still there; each charge once.
+NOTIFY_URL = os.environ.get('WIZARD_NOTIFY_URL', 'http://notifications:8080/mcp').strip()
+ALERT_LARGE = float(os.environ.get('MONEY_ALERT_LARGE', '500'))
+ALERT_DAYS = 3            # only charges dated in the last few days count as new
+ALERT_REMIND_DAYS = 3
+ALERT_KEEP = 400
+
+
+def alert_settings(c):
+    s = _setting(c, 'alerts') or {}
+    return {'on': s.get('on', True) is not False, 'large': float(s.get('large') or ALERT_LARGE)}
+
+
+def _open_link():
+    o = next((o for o in sorted(TRUSTED_ORIGINS) if o.startswith('https://')), '')
+    return o + '/wizard-os-home/?open=money' if o else ''
+
+
+def notify_owner(title, message, priority='default', tags=''):
+    """One notification through the Notifications app. True only when it answered that it was sent."""
+    u = urlsplit(NOTIFY_URL)
+    if u.scheme != 'http' or u.username or u.password or not u.hostname:
+        return False
+    args = {'title': title[:120], 'message': message[:600], 'priority': priority, 'app': APP_ID}
+    if tags:
+        args['tags'] = tags
+    link = _open_link()
+    if link:
+        args['link'] = link
+    body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'notify', 'arguments': args}}).encode()
+    req = urllib.request.Request(NOTIFY_URL, data=body, method='POST', headers={
+        'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'User-Agent': f'{APP_ID}/{VERSION}'})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            raw = r.read(65536).decode('utf-8', 'replace')
+    except (OSError, urllib.error.URLError, ValueError):
+        return False
+    m = re.search(r'\{.*\}', raw, re.S)   # plain JSON or one SSE data line
+    try:
+        res = json.loads(m.group(0)).get('result') or {} if m else {}
+    except ValueError:
+        return False
+    return bool(res) and not res.get('isError')
+
+
+def _charge_line(r, cur):
+    name = r.get('merchant') or r.get('description') or 'Unknown merchant'
+    acct = (r.get('account_name') or '').strip()
+    l4 = (r.get('last_four') or '')[-4:]
+    where = acct + (f' ··{l4}' if l4 and l4 not in acct else '')
+    return f"{_amount_text(r['amount'], cur)} at {name}" + (f' on {where}' if where else '') + f" ({r.get('category') or 'Uncategorized'})"
+
+
+def check_alerts(post=None, now=None):
+    """Compare what needs the owner now with what he was already told; send only what's new. Returns a summary."""
+    post = post or notify_owner
+    now = now or time.time()
+    c = db()
+    try:
+        cfg = alert_settings(c)
+        state = _setting(c, 'alert_state')
+        first = state is None
+        state = state or {'problems': {}, 'charges': []}
+        if not cfg['on']:
+            return {'on': False, 'sent': 0}
+        src = active_source(c)
+        ex = _excluded(c)
+        allaccts = [dict(r) for r in c.execute('SELECT id,institution,name,last_four,type,currency,balance,balance_at FROM accounts WHERE source=?', (src,))]
+        visible = [a for a in allaccts if not _is_out(ex, a['institution'], a['name'], a['last_four'])]
+        problems = attention(c, src, allaccts, visible)
+        since = (dt.datetime.fromtimestamp(now, dt.timezone.utc).date() - dt.timedelta(days=ALERT_DAYS)).isoformat()
+        rows = transactions({'from': since, 'origin': 'bank', 'direction': 'out', 'min_abs': cfg['large'], 'limit': 200}, c)['transactions']
+        kinds = _kinds(c)
+        cur = {a['id']: a['currency'] for a in allaccts}
+    finally:
+        c.close()
+    sent, failed = [], 0
+    # problems: key on what is wrong and where, so a changing hour count is still the same problem
+    seen = state.get('problems') or {}
+    keep = {}
+    for p in problems:
+        k = f"{p['kind']}:{p.get('institution') or ''}"
+        last = seen.get(k)
+        if last and now - last < ALERT_REMIND_DAYS * 86400:
+            keep[k] = last
+            continue
+        if post(p['title'], p['message'] + (f" Fix: {p['fix_label']}." if p.get('fix_label') else ''), 'high', 'needs-you'):
+            keep[k] = now
+            sent.append(k)
+        else:
+            failed += 1
+            if last:
+                keep[k] = last
+    state['problems'] = keep   # a fixed problem drops out, so it alerts again if it comes back
+    # large charges: real spending only (no transfers or card payments), each once; pending and posted copies of one
+    # charge share account + amount + merchant, so that is the key
+    told = list(state.get('charges') or [])
+    new = []
+    for r in rows:
+        if kinds.get((r.get('category') or '').lower()) == 'transfer':
+            continue
+        k = f"{r.get('account')}|{round(r['amount'], 2)}|{(r.get('merchant') or r.get('description') or '').lower()[:40]}"
+        if k in told or k in [x[0] for x in new]:
+            continue
+        new.append((k, r))
+    if new and not first:
+        if len(new) == 1:
+            ok = post('Large charge', _charge_line(new[0][1], cur.get(new[0][1].get('account'))) + '.')
+        else:
+            lines = [_charge_line(r, cur.get(r.get('account'))) for _, r in new[:6]]
+            ok = post(f'{len(new)} large charges', '; '.join(lines) + ('; and more.' if len(new) > 6 else '.'))
+        if ok:
+            sent += [k for k, _ in new]
+        else:
+            failed += 1
+            new = []   # try again on the next check
+    told += [k for k, _ in new]
+    state['charges'] = told[-ALERT_KEEP:]
+    c = db()
+    try:
+        with LOCK:
+            _set(c, 'alert_state', state)
+            c.commit()
+    finally:
+        c.close()
+    return {'on': True, 'large': cfg['large'], 'baseline': first, 'sent': len(sent), 'failed': failed,
+            'problems': len(problems), 'new_charges': 0 if first else len(new)}
+
+
+def alerts_change(a):
+    """money_alerts: read or change the owner's alert settings, or send a test notification."""
+    action = a.get('action') or 'get'
+    c = db()
+    try:
+        cfg = alert_settings(c)
+        if action == 'set':
+            if 'on' in a:
+                cfg['on'] = bool(a['on'])
+            if a.get('large') is not None:
+                v = float(a['large'])
+                if not 1 <= v <= 1_000_000:
+                    raise Problem(400, 'large is a charge size from 1 to 1,000,000.')
+                cfg['large'] = v
+            with LOCK:
+                _set(c, 'alerts', cfg)
+                c.commit()
+        elif action == 'test':
+            ok = notify_owner('Money alerts are on', f"You'll hear from Money when a bank needs you or a charge of "
+                              f"{_amount_text(-cfg['large']).lstrip(chr(0x2212))} or more comes in.")
+            return {**cfg, 'test_sent': ok, 'note': None if ok else "Couldn't reach the Notifications app."}
+        elif action != 'get':
+            raise Problem(400, 'action is get, set or test.')
+    finally:
+        c.close()
+    return cfg
+
+
 def overview():
     srcs = sources()
     c = db()
@@ -1411,7 +1573,7 @@ def overview():
                'categories': cats, 'category_kinds': _kinds(c), 'category_groups': _groups(c),
                'released_holds': _setting(c, 'released') or [], 'rules': _rules(c), 'free_check': free_check(c),
                'last_sync': _setting(c, 'last_sync'), 'error': _setting(c, 'last_error'), 'syncing': SYNCING.is_set(),
-               'attention': attention(c, src, allaccts, accts)}
+               'attention': attention(c, src, allaccts, accts), 'alerts': alert_settings(c)}
     finally:
         c.close()
     cash = sum(a['balance'] or 0 for a in accts if (a['type'] or '') in ('depository', 'checking', 'savings') or re.search(r'check|saving|ckg', (a['name'] or ''), re.I))
@@ -1451,6 +1613,10 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'id': {'type': 'string'}, 'name': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['btc', 'usd']}, 'amount': {'type': 'number'}, 'note': {'type': 'string'}},
                      'required': ['name', 'kind', 'amount'], 'additionalProperties': False},
      'annotations': {'readOnlyHint': False, 'destructiveHint': False}},
+    {'name': 'money_alerts', 'description': "Money's own notifications to the owner (sent by the app, no agent needed): a bank that needs him (signed out, stopped updating, Money can't refresh) and any charge at or above 'large' (default 500). action get (current settings), set (on true/false, large = charge size), test (sends one test notification). Change only when the owner asks.",
+     'inputSchema': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': ['get', 'set', 'test']}, 'on': {'type': 'boolean'}, 'large': {'type': 'number'}},
+                     'additionalProperties': False},
+     'annotations': {'readOnlyHint': False, 'destructiveHint': False}},
 ]
 
 
@@ -1470,7 +1636,8 @@ def rpc(msg):
             fn = {'money_overview': lambda: overview(), 'money_transactions': lambda: transactions(a),
                   'money_spending': lambda: spending(a.get('month')), 'money_update': lambda: update(a),
                   'money_manual_account': lambda: manual_save(a), 'money_net_worth': lambda: networth(),
-                  'money_categories': lambda: categories_change(a), 'money_rules': lambda: rules_change(a)}.get(n)
+                  'money_categories': lambda: categories_change(a), 'money_rules': lambda: rules_change(a),
+                  'money_alerts': lambda: alerts_change(a)}.get(n)
             if not fn:
                 return {'jsonrpc': '2.0', 'id': i, 'error': {'code': -32602, 'message': 'Unknown tool.'}}
             v = fn()
