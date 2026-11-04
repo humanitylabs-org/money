@@ -1,10 +1,11 @@
 {
   "openapi": "3.0.3",
-  "info": {"title": "Money", "version": "0.16.2"},
+  "info": {"title": "Money", "version": "0.16.3"},
   "paths": {
     "/healthz": {"get": {"summary": "Health", "responses": {"200": {"description": "{ok,app,version}"}}}},
     "/api/inbox": {"get": {"summary": "Wizard OS inbox feed v1: one item per transaction waiting for review (the app badge count); open = #tx=<source>:<id>", "responses": {"200": {"description": "{inbox: 1, items: [{key, title, text, time, priority, open}], total}"}}}},
     "/api/overview": {"get": {"summary": "Connection in use, available connections, accounts, review count, categories, rules, last sync", "responses": {"200": {"description": "overview"}}}},
+    "/api/transactions/context": {"get": {"summary": "One transaction (source, id) as {id,title,message} for a Chats Reply draft; the app never sends it", "responses": {"200": {"description": "{id,title,message}"}}}},
     "/api/transactions": {"get": {"summary": "Transactions with the owner's layer applied: from, to, account, search, category, reviewed, hidden, min_amount, max_amount, direction (out|in), origin (bank|import), min_abs, sort (newest|oldest|largest|smallest|merchant|account|category, *_desc for Z-A), limit", "responses": {"200": {"description": "{count,total,transactions}"}}}},
     "/api/networth": {"get": {"summary": "Net worth now (assets, liabilities, accounts with origin) and its history", "responses": {"200": {"description": "{net_worth,assets,liabilities,accounts,history}"}}}},
     "/api/spending": {"get": {"summary": "Spending by category for month=YYYY-MM", "responses": {"200": {"description": "{month,spent,income,categories}"}}}},

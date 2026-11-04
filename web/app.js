@@ -364,10 +364,39 @@ function openSheet(t) {
   el('t-rule-text').textContent = `Always use this for “${(t.merchant || t.description || '').slice(0, 30)}”`;
   el('t-catq').value = ''; closePicker(); showPick();
   el('t-hide').textContent = t.hidden ? 'Unhide' : 'Hide';
+  el('t-reply').hidden = !canReply();
+  /* Reply must open the draft inside the tap itself, so fetch this transaction's context now and keep it. */
+  ctxCache = null;
+  if (canReply()) api('api/transactions/context?' + new URLSearchParams({ source: t.source, id: t.id })).then((c) => { if (cur === t) ctxCache = c; }).catch(() => {});
   openDlg(el('sheet'));
 }
 const closeSheet = () => closeDlg(el('sheet'));
-el('sheet').addEventListener('close', () => { cur = null; closePicker(); });
+el('sheet').addEventListener('close', () => { cur = null; ctxCache = null; closePicker(); });
+
+/* Reply: open a fresh, unsent Chats draft with this item attached (the shared WizardApp.nav.openContextDraft).
+ * Money never sends anything; the owner writes and sends from Chats. Older shells don't have it: no Reply then. */
+let ctxCache = null;
+const canReply = () => typeof window.WizardApp?.nav?.openContextDraft === 'function';
+function reply(ctx) {
+  try {
+    if (!ctx) throw new Error('Still loading this item. Try again in a second.');
+    const receipt = window.WizardApp.nav.openContextDraft(ctx);
+    if (receipt?.kind !== 'unsent-draft' || receipt.sent !== false) throw new Error('Could not confirm an unsent draft. Nothing was sent.');
+    say('Draft opened in Chats with this item attached. Nothing sent.', 'note');
+  } catch (e) {
+    say(e.message === 'Context draft unavailable' ? 'Reload Wizard (refresh the whole page) to turn on Reply. Nothing sent.' : (e.message || 'Could not open Chats. Nothing sent.'), 'error');
+  }
+}
+el('t-reply').onclick = () => reply(ctxCache);
+/* An alert is already on screen in full, so its draft is built right here. */
+function alertContext(a) {
+  const slug = String(a.institution || a.kind || a.title || 'alert').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'alert';
+  const lines = [`Money alert: ${a.title}`, a.message || ''];
+  if (a.institution) lines.push(`Bank: ${a.institution}`);
+  if (a.as_of) lines.push(`Last update from the bank: ${a.as_of}` + (a.days != null ? ` (${a.days} days ago)` : ''));
+  if (a.fix_url) lines.push(`Where he fixes it: ${a.fix_label || 'Fix it'} (${a.fix_url})`);
+  return { id: `alert-${a.kind || 'x'}-${slug}`.slice(0, 128), title: `Money: ${a.title}`.slice(0, 1000), message: lines.filter(Boolean).join('\n').slice(0, 32000) };
+}
 /* Esc with the category list open folds the list first, as before */
 el('sheet').addEventListener('cancel', (e) => { if (!el('t-picker').hidden) { e.preventDefault(); closePicker(); } });
 
@@ -643,6 +672,11 @@ function renderAlerts() {
       const go = h('a', 'mn-btn mn-sm mn-go', a.fix_label || 'Fix it'); go.href = a.fix_url;
       if (/^https?:/.test(a.fix_url)) { go.target = '_blank'; go.rel = 'noopener noreferrer'; go.textContent += ' ↗'; }
       row.append(go);
+    }
+    if (canReply()) {
+      const rb = h('button', 'mn-btn mn-sm mn-alert-reply', 'Reply'); rb.type = 'button';
+      rb.onclick = () => reply(alertContext(a));
+      row.append(rb);
     }
     box.append(row);
   }

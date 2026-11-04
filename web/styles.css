@@ -759,3 +759,6 @@ html[data-color-scheme="light"] { --pos: color-mix(in oklch, var(--wz-success, v
   .mn-off { width: 44px; height: 44px; margin: -6px -8px -6px -8px; }
   .mn-src input { width: 22px; height: 22px; }
 }
+
+/* 0.16.3 Reply: a third small button beside Hide and Close in the transaction sheet */
+#sheet .mn-sheet-btns:has(#t-reply:not([hidden])) { grid-template-columns: 1fr 1fr 1fr; }
