@@ -740,7 +740,7 @@ html.wz-hosted .mn-tabs { padding: 3px 6px; }
 /* The selected pill hugs its label on wide windows instead of filling a quarter of the bar */
 .mn-tabs button::before { inset: 5px max(1px, calc(50% - 64px)); }
 
-/* ================= 0.16.1 friendliness pass (Miguel: "extremely friendly, easy, mobile friendly") =================
+/* ================= 0.16.2 friendliness pass (Miguel: "extremely friendly, easy, mobile friendly") =================
  * Readable green/amber text on light skins, a visible "leave out" control on every bank account,
  * and 44px thumb targets for every control on touch screens. Kit roles only. */
 [hidden] { display: none !important; }
