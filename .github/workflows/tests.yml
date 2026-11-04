@@ -1,0 +1,11 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: MONEY_SOURCES=wizard-simplefin=http://127.0.0.1:9 python3 -m unittest discover -s tests -v

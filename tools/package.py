@@ -13,7 +13,10 @@ swaps = [
      '    image: python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4\n    pids_limit: 64\n'),
     ("      PORT: '8799'\n", "      PORT: '8809'\n      BIND: 0.0.0.0\n      PYTHONDONTWRITEBYTECODE: '1'\n"),
     ('      internal_port: 8799\n', '      internal_port: 8809\n'),
-    ('      DATA_DIR: /data\n', '      DATA_DIR: /data/private\n'),
+    ('      DATA_DIR: /data\n', '      DATA_DIR: /data/private\n'
+                            "      # Money's own alerts (a bank that needs you, large charges) go through the Notifications app.\n"
+                            '      WIZARD_NOTIFY_URL: ${WIZARD_NOTIFY_URL:-http://notifications:8080/mcp}\n'
+                            '      MONEY_ALERT_LARGE: ${MONEY_ALERT_LARGE:-500}\n'),
 ]
 for old, new in swaps:
     if t.count(old) != 1:
