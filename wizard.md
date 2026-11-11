@@ -4,7 +4,7 @@ id: money
 name: Money
 type: view
 category: app
-version: 0.16.4
+version: 0.16.5
 summary: Review transactions, set categories and rules, and see spending and net worth over your bank connection.
 tags: [finance]
 license: GPL-3.0-only
@@ -34,6 +34,9 @@ system: false
 uses: [wizard-simplefin, wizard-monarch, notifications]
 needs: []
 health: /healthz
+switches:
+  contract: wizard.app-switches/1
+  path: /api/switches
 ---
 
 # Money
