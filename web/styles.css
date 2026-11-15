@@ -173,7 +173,7 @@ html.wz-hosted .mn-tabs button { min-height: 44px; gap: 1px; }
 .mn-scroll { padding-left: var(--wz-gutter, 12px); padding-right: var(--wz-gutter, 12px); }
 
 /* ================= Review table ================= */
-.mn-sum { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 6px 0 10px; }
+.mn-sum { display: grid; grid-template-columns: repeat(var(--mn-tiles, 4), minmax(0, 1fr)); gap: 8px; margin: 6px 0 10px; }
 .mn-tile { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 12px 14px; border: 0; border-radius: 16px; font: inherit; text-align: left; color: var(--ink); background: var(--solid); position: relative; overflow: hidden; }
 button.mn-tile { cursor: pointer; }
 button.mn-tile:hover { background: var(--solid-2); }
@@ -182,6 +182,8 @@ button.mn-tile:hover { background: var(--solid-2); }
 .mn-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent); }
 .mn-tile.out::before { background: var(--danger); } .mn-tile.in::before { background: var(--pos); } .mn-tile.in b { color: var(--pos); }
 .mn-tile.warn::before { background: var(--warn); } .mn-tile.warn b { color: var(--warn); } .mn-tile.ok::before { background: var(--pos); }
+.mn-tile.xfer::before { background: var(--ink-3); } .mn-tile.xfer b { color: var(--ink-2); }
+.mn-tile.on { box-shadow: inset 0 0 0 2px var(--accent); }
 
 .mn-table { border-radius: 18px; background: var(--solid); overflow: hidden; }
 .mn-th, .mn-row { display: grid; grid-template-columns: 58px minmax(180px, 2.2fr) minmax(150px, 1.3fr) minmax(170px, 1.3fr) minmax(130px, 1fr) 56px; align-items: center; column-gap: 6px; padding: 0 10px; }
@@ -197,6 +199,10 @@ button.mn-tile:hover { background: var(--solid-2); }
 .mn-row { min-height: 62px; transition: background .12s; }
 .mn-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
 .mn-row.is-reviewed { opacity: .62; }
+/* transfers don't count as spending: drawn slightly muted */
+.mn-row.is-transfer .mn-amt { color: var(--ink-3); font-weight: 600; }
+.mn-row.is-transfer .mn-abar { background: var(--ink-3); }
+.mn-row.is-transfer .c-merchant b, .mn-row.is-transfer .mn-row-n b { color: var(--ink-2); }
 .mn-td { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 56px; padding: 6px 8px; border: 0; font: inherit; color: var(--ink); background: none; text-align: left; cursor: pointer; }
 .mn-td.c-date { flex-direction: column; align-items: center; justify-content: center; gap: 0; padding: 4px; }
 .mn-td.c-date b { font-size: 17px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -527,18 +533,12 @@ html.wz-hosted .mn-tabs { padding: 3px 6px; }
 .mn-active { margin: 0 0 6px; }
 .mn-active .mn-chip { min-height: 30px; padding: 0 10px; font-size: var(--mn-t-sm); }
 
-/* Summary tiles: one line each, four across, two on a phone */
+/* Summary tiles: one line each, four or five across, two on a phone */
 .mn-sum { gap: 6px; margin: 0 0 8px; }
 .mn-tile { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 12px 8px 14px; border-radius: var(--mn-r); }
 .mn-tile::before { width: 3px; }
 .mn-tile small { font-size: var(--mn-t-sm); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mn-tile b { flex: none; font-size: var(--mn-t-lg); font-weight: 800; letter-spacing: 0; }
-/* a tile with one short note under it ("+ $601.02 in transfers not counted"): the note lists those rows */
-.mn-sum { align-items: start; }
-.mn-tilew { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.mn-tilew .mn-tile { flex: 1; }
-.mn-tnote { min-width: 0; padding: 2px 4px 2px 14px; border: 0; background: none; font: inherit; font-size: var(--mn-t-sm); color: var(--ink-3); text-align: left; line-height: 1.3; overflow-wrap: anywhere; cursor: pointer; }
-.mn-tnote:hover { color: var(--ink); text-decoration: underline; }
 
 /* Review table (wide) */
 .mn-table { border-radius: var(--mn-r); }

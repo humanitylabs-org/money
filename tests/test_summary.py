@@ -1,4 +1,4 @@
-"""Money out/in leave out transfers so nothing counts twice, and the summary says how much was left out."""
+"""Money out/in leave out transfers so nothing counts twice; transfers are their own total, so the tiles add up to the rows."""
 import datetime as dt
 import tempfile
 import unittest
@@ -33,11 +33,19 @@ class SummaryTransferTests(unittest.TestCase):
         self.assertEqual(sm['transfers_in'], 250.0)
         self.assertEqual(round(sm['out'] + sm['transfers_out'], 2), -1187.65)   # adds up to the rows
 
-    def test_kind_transfer_lists_just_the_left_out_rows(self):
+    def test_kind_transfer_lists_just_the_transfer_rows(self):
         r = self.m.transactions({'kind': 'transfer', 'direction': 'out'})
         self.assertEqual([t['id'] for t in r['transactions']], ['t3'])
-        self.assertEqual(r['summary']['out'], -601.02)          # everything shown is counted
-        self.assertEqual(r['summary']['transfers_out'], 0)
+        sm = r['summary']
+        self.assertEqual((sm['out'], sm['in']), (0, 0))            # money out/in keep excluding transfers
+        self.assertEqual((sm['transfers'], sm['transfers_out']), (1, -601.02))   # the Transfers tile stays
+
+    def test_tiles_reconcile_with_rows_and_rows_say_transfer(self):
+        r = self.m.transactions({})
+        sm = r['summary']
+        total = round(sum(t['amount'] for t in r['transactions']), 2)
+        self.assertEqual(round(sm['out'] + sm['in'] + sm['transfers_out'] + sm['transfers_in'], 2), total)
+        self.assertEqual(sorted(t['id'] for t in r['transactions'] if t['transfer']), ['t3', 't4'])
 
     def test_nothing_extra_when_no_transfers(self):
         sm = self.m.transactions({'category': 'Groceries'})['summary']

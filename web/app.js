@@ -218,7 +218,7 @@ function header() {
   return hd;
 }
 function row(t, maxAbs) {
-  const li = h('li', 'mn-row' + (t.reviewed ? ' is-reviewed' : '') + (t.amount > 0 ? ' is-in' : ''));
+  const li = h('li', 'mn-row' + (t.reviewed ? ' is-reviewed' : '') + (t.amount > 0 ? ' is-in' : '') + (t.transfer ? ' is-transfer' : ''));
   const open = () => openSheet(t);
   const dt = h('button', 'mn-td c-date'); dt.type = 'button'; dt.onclick = open;
   const d = t.date ? new Date(t.date + 'T12:00:00') : null;
@@ -253,27 +253,23 @@ function row(t, maxAbs) {
   li.append(dt, mer, ac, cat, am, tick);
   return li;
 }
-function tile(label, value, cls, onclick, note) {
-  const b = h(onclick ? 'button' : 'div', 'mn-tile ' + (cls || '')); if (onclick) { b.type = 'button'; b.onclick = onclick; }
+function tile(label, value, cls, onclick, on) {
+  const b = h(onclick ? 'button' : 'div', 'mn-tile ' + (cls || '') + (on ? ' on' : '')); if (onclick) { b.type = 'button'; b.onclick = onclick; b.setAttribute('aria-pressed', on ? 'true' : 'false'); }
   b.append(h('small', '', label), h('b', '', value));
-  if (!note) return b;
-  /* one short line under the tile: what it leaves out; tapping it lists just those rows */
-  const w = h('div', 'mn-tilew'), n = h('button', 'mn-tnote', note.text); n.type = 'button'; n.onclick = note.onclick;
-  w.append(b, n); return w;
-}
-/* Money out/in leave out transfers (card payments, moves between his accounts) so nothing counts twice; say so */
-function leftOut(dir, amt) {
-  if (!amt || f.kind) return null;
-  return { text: `+ ${money(Math.abs(amt))} in transfers not counted`,
-    onclick: () => { f.kind = 'transfer'; f.direction = dir; f.category = ''; saveF(); renderFilterChips(); loadList().catch((e) => say(e.message, 'error')); } };
+  return b;
 }
 function paintSummary(r) {
   const box = el('sumbar'); box.replaceChildren();
   const sm = r.summary || { out: 0, in: 0, uncategorized: 0 };
-  box.append(tile(f.show === 'todo' ? 'To review' : 'Showing', r.total.toLocaleString(), 'count'),
-    tile('Money out', money(sm.out), 'out', () => setF('direction', f.direction === 'out' ? '' : 'out'), leftOut('out', sm.transfers_out)),
-    tile('Money in', money(sm.in), 'in', () => setF('direction', f.direction === 'in' ? '' : 'in'), leftOut('in', sm.transfers_in)),
-    tile('Uncategorized', String(sm.uncategorized), sm.uncategorized ? 'warn' : 'ok', sm.uncategorized ? () => setF('category', f.category === 'Uncategorized' ? '' : 'Uncategorized') : null));
+  const tiles = [tile(f.show === 'todo' ? 'To review' : 'Showing', r.total.toLocaleString(), 'count'),
+    tile('Money out', money(sm.out), 'out', () => setF('direction', f.direction === 'out' ? '' : 'out'), f.direction === 'out'),
+    tile('Money in', money(sm.in), 'in', () => setF('direction', f.direction === 'in' ? '' : 'in'), f.direction === 'in')];
+  /* Transfers (card payments, moves between his accounts) are their own tile, so out + in + transfers match the rows */
+  if (sm.transfers || f.kind === 'transfer')
+    tiles.push(tile('Transfers', money(Math.round(((sm.transfers_out || 0) + (sm.transfers_in || 0)) * 100) / 100), 'xfer', () => setF('kind', f.kind === 'transfer' ? '' : 'transfer'), f.kind === 'transfer'));
+  tiles.push(tile('Uncategorized', String(sm.uncategorized), sm.uncategorized ? 'warn' : 'ok', sm.uncategorized ? () => setF('category', f.category === 'Uncategorized' ? '' : 'Uncategorized') : null, f.category === 'Uncategorized'));
+  box.style.setProperty('--mn-tiles', tiles.length);
+  box.append(...tiles);
 }
 function paintList(r, stale) {
   rows = r.transactions;
