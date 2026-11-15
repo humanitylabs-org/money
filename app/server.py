@@ -783,12 +783,20 @@ def transactions(args, c=None):
             rows.sort(key=lambda r: -(r['amount'] if r['amount'] is not None else 0))
         # Money out/in leave out money moving between his own accounts (card payments, transfers), so a card
         # charge and the autopay that settles it are not counted twice. Filtering to one category counts it all.
+        # The tiles say what they leave out: transfers_out / transfers_in are the left-out rows' totals, and
+        # kind=transfer lists just those rows (then everything shown is counted, as with one category).
         kinds = _kinds(c)
-        real = rows if args.get('category') else [r for r in rows if kinds.get((r['category'] or '').lower()) != 'transfer']
+        is_transfer = lambda r: kinds.get((r['category'] or '').lower()) == 'transfer'
+        if args.get('kind') == 'transfer':
+            rows = [r for r in rows if is_transfer(r)]
+        real = rows if args.get('category') or args.get('kind') == 'transfer' else [r for r in rows if not is_transfer(r)]
+        left = [r for r in rows if is_transfer(r)] if len(real) < len(rows) else []
         out = {'count': len(rows[:limit]), 'total': len(rows), 'transactions': rows[:limit],
                'summary': {'out': round(sum(r['amount'] for r in real if (r['amount'] or 0) < 0), 2),
                            'in': round(sum(r['amount'] for r in real if (r['amount'] or 0) > 0), 2),
                            'transfers': len(rows) - len(real),
+                           'transfers_out': round(sum(r['amount'] for r in left if (r['amount'] or 0) < 0), 2),
+                           'transfers_in': round(sum(r['amount'] for r in left if (r['amount'] or 0) > 0), 2),
                            'uncategorized': sum(1 for r in rows if not r['category'])}}
         if args.get('all') is True:
             out['rows'] = rows
@@ -1648,10 +1656,10 @@ TOOLS = [
                      'ids': {'type': 'array', 'items': {'type': 'integer'}}}, 'required': ['action'], 'additionalProperties': False}},
     {'name': 'money_overview', 'description': "Money app overview: which bank connection it reads (SimpleFIN by default), attention (banks that stopped updating or need reconnecting, or Money unable to refresh; tell the owner first), its accounts with balances, manual accounts (e.g. Bitcoin cold storage), imported history, how many transactions still need review, categories and auto-category rules, last sync.",
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}, 'annotations': {'readOnlyHint': True}},
-    {'name': 'money_transactions', 'description': "Search transactions with the owner's categories, merchant names, notes and reviewed state applied. Filters: from/to (YYYY-MM-DD), account (id, last digits or name), search, category, reviewed (true/false), min_amount/max_amount, direction (out = money out, in = money in), origin (bank = live connection, import = imported history), min_abs (size at least, in or out), sort (newest default, oldest, largest = biggest amounts first in or out, smallest, merchant/account/category A-Z or *_desc Z-A, spend = costs the most first, income = biggest money in first), limit (default 200). Each row says its origin. Negative = money out.",
+    {'name': 'money_transactions', 'description': "Search transactions with the owner's categories, merchant names, notes and reviewed state applied. Filters: from/to (YYYY-MM-DD), account (id, last digits or name), search, category, reviewed (true/false), min_amount/max_amount, direction (out = money out, in = money in), kind (transfer = only rows whose category kind is transfer, the ones money out/in leave out), origin (bank = live connection, import = imported history), min_abs (size at least, in or out), sort (newest default, oldest, largest = biggest amounts first in or out, smallest, merchant/account/category A-Z or *_desc Z-A, spend = costs the most first, income = biggest money in first), limit (default 200). Each row says its origin. Negative = money out.",
      'inputSchema': {'type': 'object', 'properties': {'from': {'type': 'string'}, 'to': {'type': 'string'}, 'account': {'type': 'string'}, 'search': {'type': 'string'}, 'category': {'type': 'string'},
                      'reviewed': {'type': 'boolean'}, 'min_amount': {'type': 'number'}, 'max_amount': {'type': 'number'}, 'limit': {'type': 'integer'},
-                     'direction': {'type': 'string', 'enum': ['out', 'in']}, 'min_abs': {'type': 'number'}, 'origin': {'type': 'string', 'enum': ['bank', 'import']},
+                     'direction': {'type': 'string', 'enum': ['out', 'in']}, 'kind': {'type': 'string', 'enum': ['transfer']}, 'min_abs': {'type': 'number'}, 'origin': {'type': 'string', 'enum': ['bank', 'import']},
                      'sort': {'type': 'string', 'enum': ['newest', 'oldest', 'largest', 'smallest', 'merchant', 'merchant_desc', 'account', 'account_desc', 'category', 'category_desc', 'spend', 'income']}}, 'additionalProperties': False},
      'annotations': {'readOnlyHint': True}},
     {'name': 'money_spending', 'description': 'Spending by category for a month (YYYY-MM, default this month); refunds and credits net against their category; transfers and card payments excluded.',

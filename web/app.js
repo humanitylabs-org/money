@@ -60,7 +60,7 @@ function paintOverview(data) {
 
 /* ---------- review: filter and sort ---------- */
 const FKEY = 'money.filter.v1';
-const DEF = { show: 'todo', sort: 'newest', direction: '', size: '', when: '', category: '', account: '', origin: '' };
+const DEF = { show: 'todo', sort: 'newest', direction: '', size: '', when: '', category: '', account: '', origin: '', kind: '' };
 let f = { ...DEF };
 try { f = { ...DEF, ...JSON.parse(localStorage.getItem(FKEY) || '{}') }; } catch (e) {}
 if (f.sort === 'spend' || f.sort === 'income') f.sort = 'largest';
@@ -90,6 +90,7 @@ function groups() {
     ['when', 'When', [['', 'Any time'], ['month', 'This month'], ['last', 'Last month'], ['30', 'Last 30 days'], ['90', 'Last 90 days']]],
     ['category', 'Category', [['', 'Any category'], ...cats.map((c) => [c, c])], true],
     ['account', 'Account', [['', 'Any account'], ...accts], true],
+    ['kind', 'Kind', [['', 'Any kind'], ['transfer', 'Transfers only']]],
   ];
   if (ov?.history) g.push(['origin', 'Source', [['', 'Both'], ['bank', 'From ' + ov.source_name], ['import', ov.history.from_name + ' history']]]);
   return g;
@@ -104,7 +105,7 @@ function label(key, val) {
 function renderFilterChips() {
   const box = el('fchips'); box.replaceChildren();
   let n = 0;
-  for (const k of ['show', 'sort', 'direction', 'size', 'when', 'category', 'account', 'origin']) {
+  for (const k of ['show', 'sort', 'direction', 'size', 'when', 'category', 'account', 'origin', 'kind']) {
     if (f[k] === DEF[k] || (k === 'show')) continue;
     n++;
     const b = h('button', 'mn-chip on', label(k, f[k])); b.type = 'button';
@@ -126,7 +127,7 @@ function query() {
   const q = new URLSearchParams({ limit: 500 });
   if (f.show === 'todo') q.set('reviewed', 'false');
   if (f.sort !== 'newest') q.set('sort', f.sort);
-  for (const k of ['direction', 'category', 'account', 'origin']) if (f[k]) q.set(k, f[k]);
+  for (const k of ['direction', 'category', 'account', 'origin', 'kind']) if (f[k]) q.set(k, f[k]);
   if (f.size) q.set('min_abs', f.size);
   const [from, to] = range(f.when);
   if (from) { q.set('from', from); q.set('to', to); }
@@ -199,7 +200,7 @@ const COLS = [
   ['date', 'Date', 'newest', 'oldest'], ['merchant', 'Merchant', 'merchant', 'merchant_desc'], ['account', 'Card', 'account', 'account_desc'],
   ['category', 'Category', 'category', 'category_desc'], ['amount', 'Amount', 'largest', 'smallest'], ['reviewed', '✓']];
 function colActive(k) {
-  return { date: !!f.when, merchant: !!el('search').value.trim(), account: !!f.account, category: !!f.category,
+  return { date: !!f.when, merchant: !!el('search').value.trim(), account: !!f.account, category: !!(f.category || f.kind),
     amount: !!(f.direction || f.size), reviewed: f.show !== DEF.show }[k];
 }
 function header() {
@@ -252,16 +253,26 @@ function row(t, maxAbs) {
   li.append(dt, mer, ac, cat, am, tick);
   return li;
 }
-function tile(label, value, cls, onclick) {
+function tile(label, value, cls, onclick, note) {
   const b = h(onclick ? 'button' : 'div', 'mn-tile ' + (cls || '')); if (onclick) { b.type = 'button'; b.onclick = onclick; }
-  b.append(h('small', '', label), h('b', '', value)); return b;
+  b.append(h('small', '', label), h('b', '', value));
+  if (!note) return b;
+  /* one short line under the tile: what it leaves out; tapping it lists just those rows */
+  const w = h('div', 'mn-tilew'), n = h('button', 'mn-tnote', note.text); n.type = 'button'; n.onclick = note.onclick;
+  w.append(b, n); return w;
+}
+/* Money out/in leave out transfers (card payments, moves between his accounts) so nothing counts twice; say so */
+function leftOut(dir, amt) {
+  if (!amt || f.kind) return null;
+  return { text: `+ ${money(Math.abs(amt))} in transfers not counted`,
+    onclick: () => { f.kind = 'transfer'; f.direction = dir; f.category = ''; saveF(); renderFilterChips(); loadList().catch((e) => say(e.message, 'error')); } };
 }
 function paintSummary(r) {
   const box = el('sumbar'); box.replaceChildren();
   const sm = r.summary || { out: 0, in: 0, uncategorized: 0 };
   box.append(tile(f.show === 'todo' ? 'To review' : 'Showing', r.total.toLocaleString(), 'count'),
-    tile('Money out', money(sm.out), 'out', () => setF('direction', f.direction === 'out' ? '' : 'out')),
-    tile('Money in', money(sm.in), 'in', () => setF('direction', f.direction === 'in' ? '' : 'in')),
+    tile('Money out', money(sm.out), 'out', () => setF('direction', f.direction === 'out' ? '' : 'out'), leftOut('out', sm.transfers_out)),
+    tile('Money in', money(sm.in), 'in', () => setF('direction', f.direction === 'in' ? '' : 'in'), leftOut('in', sm.transfers_in)),
     tile('Uncategorized', String(sm.uncategorized), sm.uncategorized ? 'warn' : 'ok', sm.uncategorized ? () => setF('category', f.category === 'Uncategorized' ? '' : 'Uncategorized') : null));
 }
 function paintList(r, stale) {
@@ -278,7 +289,7 @@ function paintList(r, stale) {
   el('all-done').hidden = !(todo && rows.length > 1);
   el('all-done').textContent = `Mark these ${rows.length} reviewed`;
   el('empty').hidden = rows.length > 0 || stale;
-  const filtered = ['sort', 'direction', 'size', 'when', 'category', 'account', 'origin'].some((k) => f[k] !== DEF[k]) || el('search').value.trim();
+  const filtered = ['sort', 'direction', 'size', 'when', 'category', 'account', 'origin', 'kind'].some((k) => f[k] !== DEF[k]) || el('search').value.trim();
   el('empty').textContent = ov && ov.syncing ? 'Pulling your transactions…' : todo && !filtered ? 'All caught up. Nothing left to review.' : 'No transactions match.';
 }
 
