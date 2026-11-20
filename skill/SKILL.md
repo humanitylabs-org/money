@@ -1,5 +1,5 @@
 ---
-name: money
+name: finances
 description: Use when the owner asks about his spending, transactions to review, categories or money rules.
 version: 0.1.0
 author: Hermes Agent
@@ -12,7 +12,7 @@ metadata:
 ---
 # Finances
 
-The owner's Finances app (app id `money`) at /money/. It reads one bank-connection app (SimpleFIN by default; Monarch or Teller if chosen under Accounts → Bank connection) and layers his own reviewed state, categories, merchant names, notes, hidden flags and rules on top.
+The owner's Finances app (app id `finances`, called Money with id `money` before 0.16.10) at /finances/. It reads one bank-connection app (SimpleFIN by default; Monarch or Teller if chosen under Accounts → Bank connection) and layers his own reviewed state, categories, merchant names, notes, hidden flags and rules on top.
 
 Read: `money_overview` (current connection, `attention` = banks that stopped updating or need reconnecting and where to fix them (mention these first, and treat those banks' numbers as out of date), accounts, how many need review, categories, rules), `money_transactions` (his categories and names applied; filters from/to, account, search, category, reviewed, amounts, direction out/in; min_abs; sort newest, oldest, largest = biggest in or out first, smallest, merchant/account/category A–Z or *_desc; each answer has a summary of money out/in and uncategorized count), `money_spending` (one month by category; refunds net; categories whose kind is transfer, such as card payments, Biz to Personal and Loan Repay, are excluded and income kinds count as income). Kinds (expense/income/transfer) come from Monarch's category groups and are listed in `money_overview.category_kinds`. Transaction summaries' money out/in also leave out transfers unless filtered to one category; `transfers` counts the left-out rows and `transfers_out` / `transfers_in` are their totals, so you can explain the gap between the tiles and the rows (`kind: transfer` lists just them).
 
@@ -26,4 +26,4 @@ Change only when he asks: `money_update` with `source` and `id` (or `ids`). Sett
 
 Negative amounts are money out. For card-benefit credits, search the transaction and report it as "looks posted"; he confirms in Card Benefits.
 
-Without a bank (only when `money_overview` has `offline: true`, the owner's money:offline-import switch): he can add transactions by hand and import CSV / OFX / QFX files downloaded from any bank in the app (Accounts → Import a bank file). Those rows come back with `origin: local` (`added`: `hand` or `file`, `origin_name` = the file name) and go through the same review, categories, rules and spending; list them with `money_transactions` `origin: local`. `money_add_transaction` (date, amount negative = out, payee, category?, note?, account? default Cash) adds one when he asks, e.g. cash spending. Files are imported by him in the app, not by you.
+Without a bank (only when `money_overview` has `offline: true`, the owner's finances:offline-import switch): he can add transactions by hand and import CSV / OFX / QFX files downloaded from any bank in the app (Accounts → Import a bank file). Those rows come back with `origin: local` (`added`: `hand` or `file`, `origin_name` = the file name) and go through the same review, categories, rules and spending; list them with `money_transactions` `origin: local`. `money_add_transaction` (date, amount negative = out, payee, category?, note?, account? default Cash) adds one when he asks, e.g. cash spending. Files are imported by him in the app, not by you.

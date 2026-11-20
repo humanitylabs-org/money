@@ -165,7 +165,7 @@ class AlertTests(unittest.TestCase):
             self.m.NOTIFY_URL = f'http://127.0.0.1:{srv.server_port}/mcp'
             self.assertTrue(self.m.notify_owner('Large charge', 'x', 'default'))
             args = got[0]['params']['arguments']
-            self.assertEqual(got[0]['params']['name'], 'notify'); self.assertEqual(args['app'], 'money')
+            self.assertEqual(got[0]['params']['name'], 'notify'); self.assertEqual(args['app'], 'finances')
             self.m.NOTIFY_URL = 'http://127.0.0.1:9/mcp'   # nothing there: a failure, not an exception
             self.assertFalse(self.m.notify_owner('t', 'x'))
         finally:
@@ -174,7 +174,7 @@ class AlertTests(unittest.TestCase):
     def test_open_link_prefers_the_listed_shell_port_over_a_bare_host(self):
         os.environ['WIZARD_TRUSTED_ORIGINS'] = 'https://box.ts.net,https://box.ts.net:8444,https://box.ts.net:8796'
         try:
-            self.assertEqual(self.m._open_link(), 'https://box.ts.net:8444/wizard-os-home/?open=money')
+            self.assertEqual(self.m._open_link(), 'https://box.ts.net:8444/wizard-os-home/?open=finances')
         finally:
             os.environ.pop('WIZARD_TRUSTED_ORIGINS')
         self.assertEqual(self.m._open_link(), '')

@@ -1,6 +1,6 @@
 {
   "name": "Finances",
-  "id": "money",
+  "id": "finances",
   "wizard_type": "view",
   "available": true,
   "short_desc": "Review transactions, set categories and rules, and see spending over your bank connection.",
