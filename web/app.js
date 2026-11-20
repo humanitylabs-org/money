@@ -49,10 +49,15 @@ function paintOverview(data) {
   const ready = ov.transactions > 0 || ov.accounts.length > 0;
   const anyConnected = ov.sources.some((s) => s.connected);
   el('setup').hidden = ready || anyConnected || ov.syncing;
+  /* switch offline-import: no bank needed; import a bank file or add by hand */
+  el('setup-offline').hidden = !ov.offline;
+  el('add-tx').hidden = !ov.offline;
+  el('local-sec').hidden = !ov.offline;
   el('badge').hidden = !ov.to_review; el('badge').textContent = ov.to_review > 99 ? '99+' : ov.to_review;
   try { window.WizardApp?.badge?.set(ov.to_review); } catch (e) {}
   renderAlerts();
   renderAccounts();
+  if (ov.offline) renderLocal();
   clearTimeout(poll);
   if (ov.syncing) poll = setTimeout(() => refresh(), 4000);
   if (tab === 'review') renderFilterChips();
@@ -81,7 +86,7 @@ const SORTS = [['newest', 'Newest first'], ['oldest', 'Oldest first'], ['largest
 const SIZES = [['', 'Any size'], ['50', '$50+'], ['100', '$100+'], ['500', '$500+'], ['1000', '$1,000+']];
 function groups() {
   const cats = ['Uncategorized', ...(ov?.categories || [])];
-  const accts = (ov?.accounts || []).map((a) => [a.id, a.name]);
+  const accts = [...(ov?.accounts || []), ...(ov?.local_accounts || [])].map((a) => [a.id, a.name]);
   const g = [
     ['show', 'Show', [['todo', 'To review'], ['all', 'Everything']]],
     ['sort', 'Sort', SORTS, true],
@@ -92,7 +97,10 @@ function groups() {
     ['account', 'Account', [['', 'Any account'], ...accts], true],
     ['kind', 'Kind', [['', 'Any kind'], ['transfer', 'Transfers only']]],
   ];
-  if (ov?.history) g.push(['origin', 'Source', [['', 'Both'], ['bank', 'From ' + ov.source_name], ['import', ov.history.from_name + ' history']]]);
+  const srcs = [['', 'Everywhere'], ['bank', 'From ' + ov?.source_name]];
+  if (ov?.history) srcs.push(['import', ov.history.from_name + ' history']);
+  if (ov?.offline) srcs.push(['local', 'Added by you']);
+  if (srcs.length > 2) g.push(['origin', 'Source', srcs]);
   return g;
 }
 function label(key, val) {
@@ -228,6 +236,7 @@ function row(t, maxAbs) {
   const sub = h('small', '');
   const mc = card(t); mc.classList.add('mn-mcard'); sub.append(mc, h('span', 'mn-msub', shortAcct(t.account_name)));
   if (t.origin === 'import') sub.append(h('span', 'mn-tag import', 'History'));
+  if (t.origin === 'local') sub.append(h('span', 'mn-tag local', t.added === 'hand' ? 'By hand' : 'File'));
   if (t.status === 'pending') sub.append(h('span', 'mn-tag pend', 'Pending'));
   if (t.note) sub.append(h('span', 'mn-note', '✎ ' + t.note));
   nm.append(sub);
@@ -327,7 +336,7 @@ function drawMenu() {
     list.append(inp); setTimeout(() => inp.focus({ preventScroll: true }), 30);
   } else if (k === 'account') {
     list.append(mItem('Every card', !f.account, () => setKey('account', '')));
-    for (const a of ov?.accounts || []) list.append(mItem(shortAcct(a.name), f.account === a.id, () => setKey('account', a.id), card({ institution: a.institution, account_name: a.name, last_four: a.last_four })));
+    for (const a of [...(ov?.accounts || []), ...(ov?.local_accounts || [])]) list.append(mItem(shortAcct(a.name), f.account === a.id, () => setKey('account', a.id), card({ institution: a.institution, account_name: a.name, last_four: a.last_four })));
   } else if (k === 'category') {
     const inp = h('input', 'wz-input'); inp.type = 'search'; inp.placeholder = 'Find a category'; list.append(inp);
     const box = h('div', 'mn-mcats'); list.append(box);
@@ -371,6 +380,7 @@ function openSheet(t) {
   el('t-rule-text').textContent = `Always use this for “${(t.merchant || t.description || '').slice(0, 30)}”`;
   el('t-catq').value = ''; closePicker(); showPick();
   el('t-hide').textContent = t.hidden ? 'Unhide' : 'Hide';
+  el('t-del').hidden = !(t.origin === 'local' && t.added === 'hand');
   el('t-reply').hidden = !canReply();
   /* Reply must open the draft inside the tap itself, so fetch this transaction's context now and keep it. */
   ctxCache = null;
@@ -494,6 +504,10 @@ el('t-save').onclick = async () => {
 el('t-hide').onclick = async () => {
   const t = cur; if (!t) return;
   try { await api('api/update', { source: t.source, id: t.id, hidden: !t.hidden, reviewed: true }); closeSheet(); say(t.hidden ? 'Unhidden.' : 'Hidden from lists and totals.', 'note', true); refresh(); } catch (e) { say(e.message, 'error'); }
+};
+el('t-del').onclick = async () => {
+  const t = cur; if (!t || !(await ask(`Delete ${t.merchant || 'this transaction'} (${money(t.amount)})?`, 'Delete'))) return;
+  try { await api('api/local/delete', { id: t.id }); closeSheet(); say('Deleted.', 'note'); refresh(); } catch (e) { say(e.message, 'error'); }
 };
 el('all-done').onclick = async () => {
   if (!rows.length) return;
@@ -800,6 +814,143 @@ el('m-save').onclick = async () => {
 el('m-del').onclick = async () => {
   if (!mcur || !(await ask(`Delete ${mcur.name}?`, 'Delete'))) return;
   try { await api(`api/manual/${mcur.id}/delete`, {}); closeManual(); say('Deleted.', 'note'); refresh(); } catch (e) { say(e.message, 'error'); }
+};
+
+/* ---------- without a bank (switch offline-import): add by hand, import a bank file ---------- */
+const AKEY = 'money.addacct.v1';
+let adir = 'out';
+function setDir(d) { adir = d; el('a-dir').querySelectorAll('.mn-chip').forEach((b) => { b.classList.toggle('on', b.dataset.dir === d); b.setAttribute('aria-pressed', b.dataset.dir === d ? 'true' : 'false'); }); }
+el('a-dir').querySelectorAll('.mn-chip').forEach((b) => b.onclick = () => setDir(b.dataset.dir));
+function fillAccounts(listId) {
+  const dl = el(listId); dl.replaceChildren();
+  for (const a of ov?.local_accounts || []) { const o = document.createElement('option'); o.value = a.name; dl.append(o); }
+}
+function renderLocal() {
+  const box = el('local'); box.replaceChildren();
+  const list = ov?.local_accounts || [];
+  if (!list.length) { box.append(h('p', 'mn-small mn-pad', 'Nothing yet. Import a file from your bank, or add spending by hand.')); return; }
+  const wrap = h('div', 'mn-bank'); const ul = h('ul', 'mn-accts');
+  for (const a of list) {
+    const li = h('li', 'mn-tap'); li.tabIndex = 0;
+    li.onclick = () => { tab = 'review'; f = { ...DEF, show: 'all', account: a.id }; saveF(); el('search').value = ''; showTab(); renderFilterChips(); loadList().catch((e) => say(e.message, 'error')); };
+    const n = h('span', 'mn-row-n');
+    const bits = [`${a.transactions.toLocaleString()} transaction${a.transactions === 1 ? '' : 's'}`, a.from ? `${day(a.from)} – ${day(a.to)}` : null, a.files.length ? 'from ' + a.files.slice(0, 2).join(', ') + (a.files.length > 2 ? ` +${a.files.length - 2}` : '') : null];
+    n.append(h('b', '', a.name), h('small', '', bits.filter(Boolean).join(' · ')));
+    li.append(card({ institution: a.name, account_name: a.name, last_four: a.last_four }), n, h('span', 'mn-chev', '›')); ul.append(li);
+  }
+  wrap.append(ul); box.append(wrap);
+}
+function openAdd() {
+  setDir('out');
+  el('a-amount').value = ''; el('a-payee').value = ''; el('a-note').value = '';
+  el('a-date').value = iso(new Date());
+  let last = ''; try { last = localStorage.getItem(AKEY) || ''; } catch (e) {}
+  el('a-account').value = last; fillAccounts('a-accounts');
+  const sel = el('a-cat'); sel.replaceChildren();
+  const none = document.createElement('option'); none.value = ''; none.textContent = 'Choose later (waits in review)'; sel.append(none);
+  for (const g of catGroups()) {
+    const og = document.createElement('optgroup'); og.label = groupHead(g);
+    for (const c of g.categories) { const o = document.createElement('option'); o.value = c; o.textContent = c; og.append(o); }
+    sel.append(og);
+  }
+  openDlg(el('asheet'));
+  setTimeout(() => el('a-amount').focus({ preventScroll: true }), 40);
+}
+const closeAdd = () => closeDlg(el('asheet'));
+el('add-tx').onclick = openAdd; el('local-add').onclick = openAdd; el('setup-add').onclick = openAdd;
+el('a-close').onclick = closeAdd;
+el('a-save').onclick = async () => {
+  const n = parseFloat(String(el('a-amount').value).replace(/[^0-9.,-]/g, '').replace(/,(?=\d{3}\b)/g, '').replace(',', '.'));
+  if (!n) { say('Enter an amount.', 'error'); el('a-amount').focus(); return; }
+  const amount = adir === 'out' ? -Math.abs(n) : Math.abs(n);
+  const account = el('a-account').value.trim();
+  try {
+    const r = await api('api/local/add', { date: el('a-date').value, amount, payee: el('a-payee').value, category: el('a-cat').value, note: el('a-note').value, account: account || undefined });
+    try { localStorage.setItem(AKEY, account); } catch (e) {}
+    if (el('a-cat').value) remember_cat(el('a-cat').value);
+    closeAdd(); say(`Added ${r.transaction.merchant || ''} ${money(amount)}.`, 'note'); refresh();
+  } catch (e) { say(e.message, 'error'); }
+};
+el('a-amount').onkeydown = el('a-payee').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); el('a-save').click(); } };
+
+let imp = null;   // { filename, text, plan }
+const MAPK = [['date', 'Date'], ['amount', 'Amount'], ['debit', 'Money out'], ['credit', 'Money in'], ['description', 'Description'], ['category', 'Category']];
+function pickFile() { el('i-file').value = ''; el('i-file').click(); }
+el('local-import').onclick = pickFile; el('setup-import').onclick = pickFile; el('i-other').onclick = pickFile;
+el('i-file').onchange = async () => {
+  const file = el('i-file').files && el('i-file').files[0]; if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { say('That file is too big (8 MB at most).', 'error'); return; }
+  try {
+    imp = { filename: file.name, text: await file.text(), plan: null, mapping: null, account: '' };
+    await preview();
+    if (!el('isheet').open) openDlg(el('isheet'));
+  } catch (e) { say(e.message, 'error'); }
+};
+async function preview() {
+  const body = { filename: imp.filename, text: imp.text };
+  if (imp.mapping) body.mapping = imp.mapping;
+  if (imp.account) body.account = imp.account;
+  imp.plan = await api('api/local/preview', body);
+  paintImport();
+}
+function paintImport() {
+  const p = imp.plan;
+  el('i-title').textContent = p.filename;
+  const range = p.first ? `${day(p.first)} – ${day(p.last)}` : '';
+  el('i-sum').textContent = p.total
+    ? `${p.total.toLocaleString()} transaction${p.total === 1 ? '' : 's'}${range ? ', ' + range : ''}. ${p.new.toLocaleString()} new${p.duplicates ? `, ${p.duplicates.toLocaleString()} already here (skipped)` : ''}. Money out ${money(p.money_out)}, money in ${money(p.money_in)}.` + (p.bad ? ` ${p.bad} row${p.bad === 1 ? '' : 's'} couldn't be read.` : '') + (p.known ? ' Columns remembered from last time.' : '')
+    : 'No transactions could be read yet. Pick the date and amount columns below.';
+  el('i-account').value = p.account || ''; fillAccounts('i-accounts');
+  const map = el('i-map'); map.replaceChildren();
+  el('i-negate-l').hidden = !p.mapping;
+  if (p.mapping) {
+    el('i-negate').checked = !!p.mapping.negate;
+    for (const [k, lab] of MAPK) {
+      const l = h('label', '', lab); const sel = h('select', 'wz-input');
+      const o0 = document.createElement('option'); o0.value = ''; o0.textContent = k === 'date' ? 'Pick a column' : 'None'; sel.append(o0);
+      p.headers.forEach((hd, i) => { const o = document.createElement('option'); o.value = String(i); const ex = (p.sample[0] || [])[i]; o.textContent = hd + (ex && ex !== hd ? ` (${String(ex).slice(0, 18)})` : ''); sel.append(o); });
+      sel.value = p.mapping[k] == null ? '' : String(p.mapping[k]);
+      sel.onchange = () => remap(k, sel.value === '' ? null : +sel.value);
+      l.append(sel); map.append(l);
+    }
+    const l = h('label', '', 'Date looks like'); const sel = h('select', 'wz-input');
+    for (const fmt of p.date_formats) { const o = document.createElement('option'); o.value = fmt.id; o.textContent = fmt.label; sel.append(o); }
+    sel.value = p.mapping.date_format; sel.onchange = () => remap('date_format', sel.value);
+    l.append(sel); map.append(l);
+  }
+  const pv = el('i-prev'); pv.replaceChildren();
+  if (p.preview.length) {
+    const t = h('table'); const tb = h('tbody');
+    for (const r of p.preview) {
+      const tr = h('tr'); tr.append(h('td', '', day(r.date)), h('td', 'd', r.description || '—'), h('td', 'a' + (r.amount > 0 ? ' pos' : ''), (r.amount > 0 ? '+' : '') + money(r.amount)));
+      tb.append(tr);
+    }
+    t.append(tb); pv.append(t);
+  }
+  pv.hidden = !p.preview.length;
+  el('i-go').disabled = !p.new;
+  el('i-go').textContent = p.new ? `Import ${p.new.toLocaleString()}` : (p.total ? 'All already here' : 'Import');
+}
+async function remap(k, v) {
+  imp.mapping = { ...imp.plan.mapping, [k]: v };
+  if (k === 'amount' && v != null) { imp.mapping.debit = null; imp.mapping.credit = null; }
+  if ((k === 'debit' || k === 'credit') && v != null) imp.mapping.amount = null;
+  try { await preview(); } catch (e) { say(e.message, 'error'); }
+}
+el('i-negate').onchange = () => remap('negate', el('i-negate').checked);
+el('i-account').onchange = async () => { imp.account = el('i-account').value.trim(); try { await preview(); } catch (e) { say(e.message, 'error'); } };
+el('i-close').onclick = () => closeDlg(el('isheet'));
+el('isheet').addEventListener('close', () => { imp = null; });
+el('i-go').onclick = async () => {
+  if (!imp) return;
+  const body = { filename: imp.filename, text: imp.text, account: el('i-account').value.trim() || imp.plan.account };
+  if (imp.plan.mapping) body.mapping = imp.plan.mapping;
+  try {
+    const r = await api('api/local/import', body);
+    closeDlg(el('isheet'));
+    say(`Imported ${r.imported.toLocaleString()} into ${r.account}${r.duplicates ? ` (${r.duplicates.toLocaleString()} already here)` : ''}. They're waiting in Review.`, 'note');
+    tab = 'review'; f = { ...DEF }; saveF(); el('search').value = ''; showTab(); renderFilterChips(); refresh();
+  } catch (e) { say(e.message, 'error'); }
 };
 
 el('sync').onclick = async () => { try { ov = await api('api/sync', {}); say('Refreshing…', 'note'); refresh(); } catch (e) { say(e.message, 'error'); } };

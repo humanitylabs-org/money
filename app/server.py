@@ -86,6 +86,7 @@ def db():
         note TEXT, updated TEXT);
       CREATE TABLE IF NOT EXISTS hints (id TEXT PRIMARY KEY, akey TEXT, date TEXT, amount REAL, merchant TEXT,
         category TEXT, seen TEXT);
+      CREATE TABLE IF NOT EXISTS local_meta (id TEXT PRIMARY KEY, how TEXT, file TEXT, added TEXT);
     ''')
     if 'kind' not in {r[1] for r in c.execute('PRAGMA table_info(categories)')}:
         c.execute('ALTER TABLE categories ADD COLUMN kind TEXT')   # expense | income | transfer (None = guess by name)
@@ -642,8 +643,9 @@ def _tidy(desc):
 
 SELECT = '''SELECT t.source, t.id, t.account, a.institution, a.name AS account_name, a.last_four, t.date, t.amount,
   t.description, t.merchant, t.source_category, t.status, COALESCE(e.reviewed,0) AS reviewed, e.category AS e_category,
-  e.merchant AS e_merchant, e.note, COALESCE(e.hidden,0) AS hidden, e.splits AS e_splits
-  FROM tx t LEFT JOIN accounts a ON a.source=t.source AND a.id=t.account LEFT JOIN edits e ON e.source=t.source AND e.id=t.id'''
+  e.merchant AS e_merchant, e.note, COALESCE(e.hidden,0) AS hidden, e.splits AS e_splits, lm.how AS local_how, lm.file AS local_file
+  FROM tx t LEFT JOIN accounts a ON a.source=t.source AND a.id=t.account LEFT JOIN edits e ON e.source=t.source AND e.id=t.id
+  LEFT JOIN local_meta lm ON t.source='local' AND lm.id=t.id'''
 
 
 def _key(inst, name, last_four):
@@ -705,11 +707,14 @@ def transactions(args, c=None):
     c = c or db()
     try:
         src = active_source(c)
-        q, p = [SELECT + " WHERE t.source IN (?, 'import')"], [src]
+        local = switch_on(OFFLINE)   # money:offline-import: hand-added and bank-file rows sit beside the bank's
+        q, p = [SELECT + (" WHERE t.source IN (?, 'import', 'local')" if local else " WHERE t.source IN (?, 'import')")], [src]
         if args.get('origin') == 'bank':
             q.append('AND t.source=?'); p.append(src)
         elif args.get('origin') == 'import':
             q.append("AND t.source='import'")
+        elif args.get('origin') == 'local':
+            q.append("AND t.source='local'")
         for key, op in (('from', '>='), ('to', '<=')):
             v = args.get(key)
             if v:
@@ -756,8 +761,15 @@ def transactions(args, c=None):
                     if r['id'] not in keep or (k, round(r['amount'] or 0, 2)) in live_amounts.get(r['date'], set()):
                         continue   # the live connection covers this account from here on: never show it twice
             v = _view(r, ctx)
-            v['origin'] = 'import' if r['source'] == 'import' else 'bank'
-            v['origin_name'] = names[v['origin']]
+            how, file = v.pop('local_how', None), v.pop('local_file', None)
+            if r['source'] == 'local':
+                v['origin'], v['added'] = 'local', how or 'file'
+                v['origin_name'] = 'Added by hand' if how == 'hand' else (file or 'A bank file')
+                if file:
+                    v['file'] = file
+            else:
+                v['origin'] = 'import' if r['source'] == 'import' else 'bank'
+                v['origin_name'] = names[v['origin']]
             rows.append(v)
         if args.get('search'):
             s = str(args['search'])[:80].lower()
@@ -1378,6 +1390,8 @@ def attention(c, src, allaccts, visible):
     today = dt.datetime.now(dt.timezone.utc).date()
     out = []
     err, last = _setting(c, 'last_error'), _setting(c, 'last_sync')
+    if err and switch_on(OFFLINE) and not any(s['installed'] for s in sources()):
+        err = last = None   # no bank app at all and he uses Finances without one: nothing is broken
     if err:
         out.append({'kind': 'sync', 'institution': None, 'title': f"Finances can't refresh from {name}",
                     'message': err, 'fix_url': app, 'fix_label': f'Open {name}'})
@@ -1640,9 +1654,426 @@ def overview():
                'attention': attention(c, src, allaccts, accts), 'alerts': alert_settings(c)}
     finally:
         c.close()
+    if switch_on(OFFLINE):
+        out['offline'] = True
+        out['local_accounts'] = local_accounts()
     cash = sum(a['balance'] or 0 for a in accts if (a['type'] or '') in ('depository', 'checking', 'savings') or re.search(r'check|saving|ckg', (a['name'] or ''), re.I))
     out['cash'] = round(cash, 2)
     return out
+
+
+# ---------------- without a bank: hand-added transactions and bank files (switch money:offline-import) ----------------
+# Rows live in tx/accounts under source 'local', so review, categories, rules, splits, spending and the inbox treat them
+# exactly like a connected bank's. A bank connection is never touched. Each file row's id is a hash of the account, date,
+# amount, text and how many identical rows came before it in the same file (or the OFX FITID), so re-importing the same
+# file, or an overlapping later export, skips what is already here.
+OFFLINE = 'offline-import'
+LOCAL_MAX = 8 * 1024 * 1024   # a bank file, as text
+HAND_ACCOUNT = 'Cash'
+DATE_FORMATS = [('%Y-%m-%d', 'YYYY-MM-DD'), ('%m/%d/%Y', 'MM/DD/YYYY'), ('%d/%m/%Y', 'DD/MM/YYYY'), ('%m/%d/%y', 'MM/DD/YY'),
+                ('%d/%m/%y', 'DD/MM/YY'), ('%d.%m.%Y', 'DD.MM.YYYY'), ('%d.%m.%y', 'DD.MM.YY'), ('%Y/%m/%d', 'YYYY/MM/DD'),
+                ('%d-%m-%Y', 'DD-MM-YYYY'), ('%m-%d-%Y', 'MM-DD-YYYY'), ('%Y%m%d', 'YYYYMMDD'), ('%d %b %Y', '05 Jan 2026'),
+                ('%d-%b-%Y', '05-Jan-2026'), ('%d-%b-%y', '05-Jan-26'), ('%b %d, %Y', 'Jan 05, 2026'), ('%b %d %Y', 'Jan 05 2026'),
+                ('%d %B %Y', '05 January 2026'), ('%B %d, %Y', 'January 05, 2026')]
+_TIME_RE = re.compile(r'(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AaPp][Mm])?(?:Z|[+-]\d{2}:?\d{2})?)$')
+
+
+def _need_offline():
+    if not switch_on(OFFLINE):
+        raise Problem(409, 'Adding transactions without a bank is switched off.')
+
+
+def _local_account(c, name, last_four=None, kind=None):
+    """The 'local' account row for this name (made the first time). Returns its id."""
+    name = re.sub(r'\s+', ' ', str(name or '').strip())[:60] or HAND_ACCOUNT
+    aid = 'L' + hashlib.sha1(name.lower().encode()).hexdigest()[:10]
+    if not c.execute("SELECT 1 FROM accounts WHERE source='local' AND id=?", (aid,)).fetchone():
+        c.execute("INSERT INTO accounts VALUES ('local',?,?,?,?,?,'USD',NULL,NULL)", (aid, 'Added by you', name,
+                  (str(last_four)[-4:] if last_four else None), kind))
+    return aid
+
+
+def local_accounts(c=None):
+    own = c is None
+    c = c or db()
+    try:
+        out = []
+        for a in c.execute("SELECT id,name,last_four,type FROM accounts WHERE source='local' ORDER BY name"):
+            n = c.execute("SELECT COUNT(*), MIN(date), MAX(date) FROM tx WHERE source='local' AND account=?", (a['id'],)).fetchone()
+            files = [r[0] for r in c.execute("""SELECT DISTINCT m.file FROM local_meta m JOIN tx t ON t.source='local' AND t.id=m.id
+                                                 WHERE t.account=? AND m.file IS NOT NULL ORDER BY m.file""", (a['id'],))]
+            out.append({'id': a['id'], 'name': a['name'], 'last_four': a['last_four'], 'type': a['type'], 'transactions': n[0],
+                        'from': n[1], 'to': n[2], 'files': files[:20]})
+        return out
+    finally:
+        if own:
+            c.close()
+
+
+def local_add(body):
+    """One transaction typed in by hand: date, amount (negative = money out), payee, category?, note?, account?."""
+    _need_offline()
+    date = str(body.get('date') or dt.date.today().isoformat())
+    if not DATE_RE.match(date):
+        raise Problem(400, 'date must be YYYY-MM-DD.')
+    try:
+        dt.date.fromisoformat(date)
+        amount = round(float(str(body.get('amount')).replace(',', '')), 2)
+    except (TypeError, ValueError):
+        raise Problem(400, 'Enter an amount.') from None
+    if not amount or not -1e9 < amount < 1e9:
+        raise Problem(400, 'Enter an amount.')
+    payee = re.sub(r'\s+', ' ', str(body.get('payee') or '').strip())[:60]
+    if not payee:
+        raise Problem(400, 'Say who it was paid to (or from).')
+    cat = str(body.get('category') or '').strip()[:60] or None
+    note = str(body.get('note') or '').strip()[:300] or None
+    tid = 'h' + secrets_token() + secrets_token()
+    now = _now()
+    with LOCK:
+        c = db()
+        try:
+            with c:
+                aid = _local_account(c, body.get('account') or HAND_ACCOUNT)
+                c.execute("INSERT INTO tx VALUES ('local',?,?,?,?,?,?,NULL,'posted',?)", (tid, aid, date, amount, payee, payee, now))
+                c.execute("INSERT INTO local_meta VALUES (?,?,NULL,?)", (tid, 'hand', now))
+                if cat and not c.execute('SELECT 1 FROM categories WHERE name=?', (cat,)).fetchone():
+                    c.execute('INSERT INTO categories(name,pos) VALUES (?, (SELECT COALESCE(MAX(pos),0)+1 FROM categories))', (cat,))
+                # he typed it himself, so it needs no review; with no category it waits in review like any other
+                c.execute("INSERT INTO edits(source,id,reviewed,category,merchant,note,hidden,at) VALUES ('local',?,?,?,NULL,?,0,?)",
+                          (tid, 1 if cat else 0, cat, note, now))
+        finally:
+            c.close()
+    rows = transactions({'origin': 'local', 'source': 'local', 'id': tid, 'limit': 1, 'hidden': 'true'})['transactions']
+    return {'ok': True, 'transaction': rows[0] if rows else {'source': 'local', 'id': tid}}
+
+
+def local_delete(body):
+    """Delete a hand-added transaction (bank-file rows are hidden instead, so a re-import cannot bring them back)."""
+    _need_offline()
+    tid = str(body.get('id') or '')[:40]
+    with LOCK:
+        c = db()
+        try:
+            if not c.execute("SELECT 1 FROM local_meta WHERE id=? AND how='hand'", (tid,)).fetchone():
+                raise Problem(404, 'Only transactions you added by hand can be deleted.')
+            with c:
+                for t in ('tx', 'edits'):
+                    c.execute(f"DELETE FROM {t} WHERE source='local' AND id=?", (tid,))
+                c.execute('DELETE FROM local_meta WHERE id=?', (tid,))
+        finally:
+            c.close()
+    return {'ok': True}
+
+
+def _amount(v):
+    """'1,234.56', '(12.00)', '-12', '12,50' (decimal comma), '$ 9.99', '12.00 CR' / 'DR' -> float or None."""
+    s = str(v or '').strip().replace('\u2212', '-').replace('\xa0', '').replace(' ', '')
+    if not s:
+        return None
+    sign = 1
+    m = re.search(r'(CR|DR|C|D)$', s, re.I)
+    if m and re.search(r'\d', s[:m.start()]):
+        sign = -1 if m.group(1).upper().startswith('D') else 1
+        s = s[:m.start()]
+    if s.startswith('(') and s.endswith(')'):
+        sign, s = -sign, s[1:-1]
+    s = re.sub(r'^[A-Za-z$\u00a3\u20ac\u00a5\u0e3f]+|[A-Za-z$\u00a3\u20ac\u00a5\u0e3f]+$', '', s)
+    if s.startswith('+'):
+        s = s[1:]
+    if s.startswith('-'):
+        sign, s = -sign, s[1:]
+    elif s.endswith('-'):
+        sign, s = -sign, s[:-1]
+    s = re.sub(r'^[A-Za-z$\u00a3\u20ac\u00a5\u0e3f]+', '', s)
+    if not re.fullmatch(r'[\d.,\']+', s) or not re.search(r'\d', s):
+        return None
+    s = s.replace("'", '')
+    if ',' in s and '.' in s:
+        s = s.replace('.', '').replace(',', '.') if s.rfind(',') > s.rfind('.') else s.replace(',', '')
+    elif ',' in s:
+        s = s.replace(',', '.') if re.fullmatch(r'\d+,\d{1,2}', s) else s.replace(',', '')
+    elif s.count('.') > 1:
+        s = s.replace('.', '')
+    try:
+        return round(sign * float(s), 2)
+    except ValueError:
+        return None
+
+
+def _date(v, fmt):
+    s = _TIME_RE.sub('', str(v or '').strip().strip('"'))
+    if fmt == '%Y-%m-%d':
+        s = s[:10]
+    try:
+        d = dt.datetime.strptime(s, fmt).date()
+    except ValueError:
+        return None
+    return d.isoformat() if 1970 <= d.year <= 2100 else None
+
+
+def _guess_format(values):
+    vals = [v for v in values if str(v or '').strip()][:200]
+    if not vals:
+        return None
+    for fmt, _ in DATE_FORMATS:
+        if all(_date(v, fmt) for v in vals):
+            return fmt
+    return None
+
+
+def _decode(text):
+    return str(text or '').lstrip('\ufeff')
+
+
+def _csv_rows(text):
+    import csv
+    import io
+    sample = text[:20000]
+    lines = [x for x in sample.splitlines() if x.strip()][:30]
+    counts = {d: sum(x.count(d) for x in lines) for d in (',', ';', '\t', '|')}
+    delim = max(counts, key=counts.get) if any(counts.values()) else ','
+    rows = [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), delimiter=delim)]
+    return [r for r in rows if any(r)], delim
+
+
+_HEADS = {'date': [r'^(transaction|trans|txn|booking|posting|posted)?\s*date$', r'\bdate\b', r'posted|booking|datum|fecha'],
+          'amount': [r'^amount$', r'^(transaction )?amount\b', r'amount$', r'^value$', r'betrag|importe|montant|^sum$'],
+          'debit': [r'debit|withdraw|paid out|money out|outflow|spent|charge'],
+          'credit': [r'credit(?!.*card)|deposit|paid in|money in|inflow|received'],
+          'description': [r'^description$', r'payee|merchant', r'description|^name$|details|narrative|particulars|^transaction$', r'memo|reference|text'],
+          'category': [r'categor']}
+
+
+def _guess_map(headers, data):
+    hl = [h.lower().strip() for h in headers]
+    used, mp = set(), {}
+    for key in ('date', 'amount', 'debit', 'credit', 'description', 'category'):
+        for pat in _HEADS[key]:
+            hit = next((i for i, h in enumerate(hl) if i not in used and h and re.search(pat, h) and 'balance' not in h), None)
+            if hit is not None:
+                mp[key] = hit
+                used.add(hit)
+                break
+    cols = max((len(r) for r in data[:50]), default=len(headers))
+    col = lambda i: [r[i] if i < len(r) else '' for r in data[:50]]
+    if 'date' not in mp:   # by content: the first column whose every value is a date
+        mp['date'] = next((i for i in range(cols) if i not in used and _guess_format(col(i))), None)
+        used.add(mp['date'])
+    if 'amount' not in mp and not ('debit' in mp or 'credit' in mp):
+        mp['amount'] = next((i for i in range(cols) if i not in used and col(i) and all(_amount(v) is not None for v in col(i) if v.strip())
+                             and any(v.strip() for v in col(i))), None)
+        used.add(mp['amount'])
+    if 'amount' in mp and mp['amount'] is not None:
+        mp.pop('debit', None), mp.pop('credit', None)
+    if 'description' not in mp:
+        free = [i for i in range(cols) if i not in used]
+        mp['description'] = max(free, key=lambda i: sum(len(v) for v in col(i)), default=None)
+    fmt = _guess_format(col(mp['date'])) if mp.get('date') is not None else None
+    out = {k: mp.get(k) for k in ('date', 'amount', 'debit', 'credit', 'description', 'category')}
+    out['date_format'] = fmt or '%Y-%m-%d'
+    out['negate'] = False
+    return out
+
+
+def _signature(headers, has_header):
+    return hashlib.sha1(('|'.join(_norm(h) for h in headers) if has_header else f'noheader:{len(headers)}').encode()).hexdigest()[:16]
+
+
+def _parse_csv(text):
+    rows, delim = _csv_rows(text)
+    if not rows:
+        raise Problem(400, 'That file has no rows.')
+    # Some banks put a few lines about the account above the real header: the header is the row just above the
+    # first row that has a date in it and the same number of columns.
+    start, has_header = 0, True
+    for i in range(min(len(rows) - 1, 25)):
+        nxt = rows[i + 1]
+        if len(nxt) >= 2 and len(nxt) == len(rows[i]) and any(_guess_format([v]) for v in nxt) \
+                and not any(_guess_format([v]) for v in rows[i]):
+            start = i
+            break
+    else:
+        if any(_guess_format([v]) for v in rows[0]):
+            has_header = False
+    if has_header and start == 0 and len(rows) > 1 and any(_guess_format([v]) for v in rows[0]):
+        has_header = False
+    headers = rows[start] if has_header else [f'Column {i + 1}' for i in range(max(len(r) for r in rows[:50]))]
+    data = rows[start + 1:] if has_header else rows
+    return headers, data, has_header
+
+
+def _apply_map(data, mp):
+    out, bad = [], 0
+    g = lambda r, k: (r[mp[k]] if mp.get(k) is not None and mp[k] < len(r) else '')
+    for r in data:
+        d = _date(g(r, 'date'), mp.get('date_format') or '%Y-%m-%d')
+        if mp.get('amount') is not None:
+            a = _amount(g(r, 'amount'))
+        else:
+            de, cr = _amount(g(r, 'debit')), _amount(g(r, 'credit'))
+            a = None if de is None and cr is None else round((abs(cr) if cr else 0) - (abs(de) if de else 0), 2)
+        if not d or a is None:
+            if any(x.strip() for x in r):
+                bad += 1
+            continue
+        if mp.get('negate'):
+            a = -a
+        desc = re.sub(r'\s+', ' ', g(r, 'description')).strip()[:200]
+        out.append({'date': d, 'amount': a, 'description': desc, 'category': g(r, 'category').strip()[:60] or None})
+    return out, bad
+
+
+def _ofx_tag(block, tag):
+    m = re.search(r'<' + tag + r'>\s*([^<\r\n]*)', block, re.I)
+    return m.group(1).strip() if m else None
+
+
+def _parse_ofx(text):
+    rows = []
+    for b in re.findall(r'<STMTTRN>(.*?)(?=</STMTTRN>|<STMTTRN>|</BANKTRANLIST>)', text, re.S | re.I):
+        d = re.match(r'(\d{8})', _ofx_tag(b, 'DTPOSTED') or _ofx_tag(b, 'DTUSER') or '')
+        a = _amount(_ofx_tag(b, 'TRNAMT'))
+        if not d or a is None:
+            continue
+        name, memo = _ofx_tag(b, 'NAME') or '', _ofx_tag(b, 'MEMO') or ''
+        desc = name if not memo or memo.lower() in name.lower() else (f'{name} {memo}'.strip() if name else memo)
+        try:
+            day = dt.datetime.strptime(d.group(1), '%Y%m%d').date().isoformat()
+        except ValueError:
+            continue
+        rows.append({'date': day, 'amount': a, 'description': re.sub(r'\s+', ' ', desc).strip()[:200], 'category': None,
+                     'fitid': _ofx_tag(b, 'FITID')})
+    acct = _ofx_tag(text, 'ACCTID') or ''
+    org = _ofx_tag(text, 'ORG') or ''
+    card = bool(re.search(r'<CCSTMTRS>|<CREDITCARDMSGSRSV1>', text, re.I))
+    return rows, {'last_four': re.sub(r'\D', '', acct)[-4:] or None, 'org': org, 'card': card}
+
+
+def _row_ids(aid, rows):
+    seen, out = {}, []
+    for r in rows:
+        if r.get('fitid'):
+            out.append('f' + hashlib.sha1(f"{aid}|fitid|{r['fitid']}".encode()).hexdigest()[:24])
+            continue
+        k = f"{aid}|{r['date']}|{r['amount']:.2f}|{_norm(r['description'])}"
+        seen[k] = seen.get(k, 0) + 1
+        out.append('f' + hashlib.sha1(f'{k}|{seen[k]}'.encode()).hexdigest()[:24])
+    return out
+
+
+def _read_file(body):
+    name = re.sub(r'[\\/]+', '_', str(body.get('filename') or 'bank file').strip())[-80:] or 'bank file'
+    text = _decode(body.get('text'))
+    if not text.strip():
+        raise Problem(400, 'That file is empty.')
+    if len(text) > LOCAL_MAX:
+        raise Problem(413, 'That file is too big (8 MB at most).')
+    is_ofx = bool(re.search(r'<OFX>|OFXHEADER', text[:4000], re.I)) or name.lower().endswith(('.ofx', '.qfx'))
+    return name, text, is_ofx
+
+
+def _plan(body):
+    """Read the file and work out every row, with the remembered (or guessed, or given) column map."""
+    name, text, is_ofx = _read_file(body)
+    c = db()
+    try:
+        maps = _setting(c, 'import_maps') or {}
+        names = [a['name'] for a in c.execute("SELECT name FROM accounts WHERE source='local' ORDER BY name")]
+    finally:
+        c.close()
+    out = {'filename': name, 'kind': 'ofx' if is_ofx else 'csv', 'accounts': names,
+           'date_formats': [{'id': f, 'label': lab} for f, lab in DATE_FORMATS]}
+    if is_ofx:
+        rows, meta = _parse_ofx(text)
+        if not rows:
+            raise Problem(400, 'No transactions found in that file.')
+        sig = 'ofx:' + hashlib.sha1(f"{meta['org']}|{meta['last_four']}".encode()).hexdigest()[:12]
+        known = maps.get(sig) or {}
+        default = ' '.join(x for x in (meta['org'], ('card' if meta['card'] else 'account'), meta['last_four'] and '··' + meta['last_four']) if x)
+        out.update(signature=sig, known=bool(known), mapping=None, headers=[], sample=[], bad=0,
+                   account=body.get('account') or known.get('account') or default.strip().capitalize(), last_four=meta['last_four'],
+                   account_kind='credit' if meta['card'] else None)
+    else:
+        headers, data, has_header = _parse_csv(text)
+        sig = 'csv:' + _signature(headers, has_header)
+        known = maps.get(sig) or {}
+        mp = body.get('mapping') if isinstance(body.get('mapping'), dict) else known.get('mapping') or _guess_map(headers, data)
+        mp = {k: (int(mp[k]) if mp.get(k) not in (None, '') else None) for k in ('date', 'amount', 'debit', 'credit', 'description', 'category')} | \
+             {'date_format': mp.get('date_format') if mp.get('date_format') in dict(DATE_FORMATS) else '%Y-%m-%d', 'negate': bool(mp.get('negate'))}
+        if mp['date'] is None or (mp['amount'] is None and mp['debit'] is None and mp['credit'] is None):
+            rows, bad = [], len(data)
+        else:
+            rows, bad = _apply_map(data, mp)
+        if not known and not isinstance(body.get('mapping'), dict) and len(rows) >= 3 and mp['amount'] is not None \
+                and sum(1 for r in rows if r['amount'] > 0) >= 0.7 * sum(1 for r in rows if r['amount']):
+            mp['negate'] = True   # nearly every row positive: a card export that lists charges as positive amounts
+            rows = [{**r, 'amount': -r['amount']} for r in rows]
+        base = re.sub(r'\.(csv|txt|tsv)$', '', name, flags=re.I)
+        out.update(signature=sig, known=bool(known), mapping=mp, headers=headers, sample=data[:5], bad=bad,
+                   account=body.get('account') or known.get('account') or re.sub(r'[_-]+', ' ', base).strip()[:60], last_four=None, account_kind=None)
+    out['rows'] = rows
+    return out
+
+
+def _summarize(plan, existing):
+    rows = plan.pop('rows')
+    ids = plan.pop('ids')
+    new = [r for r, i in zip(rows, ids) if i not in existing]
+    plan.update(total=len(rows), new=len(new), duplicates=len(rows) - len(new),
+                preview=rows[:8], first=min((r['date'] for r in rows), default=None), last=max((r['date'] for r in rows), default=None),
+                money_out=round(sum(r['amount'] for r in new if r['amount'] < 0), 2), money_in=round(sum(r['amount'] for r in new if r['amount'] > 0), 2))
+    return plan
+
+
+def local_preview(body):
+    """What importing this file would do, without saving anything: the column map, the first rows, new vs already here."""
+    _need_offline()
+    plan = _plan(body)
+    aid = 'L' + hashlib.sha1((re.sub(r'\s+', ' ', str(plan['account'] or '').strip())[:60] or HAND_ACCOUNT).lower().encode()).hexdigest()[:10]
+    plan['ids'] = _row_ids(aid, plan['rows'])
+    c = db()
+    try:
+        existing = {r[0] for r in c.execute("SELECT id FROM tx WHERE source='local' AND account=?", (aid,))}
+    finally:
+        c.close()
+    return _summarize(plan, existing)
+
+
+def local_import(body):
+    """Save a bank file's rows into one account; rows already here are skipped. The column map is remembered for
+    this bank's file layout, so next time the file goes straight in."""
+    _need_offline()
+    plan = _plan(body)
+    if not plan['rows']:
+        raise Problem(400, 'No rows could be read with these columns. Check the date and amount columns.')
+    now = _now()
+    with LOCK:
+        c = db()
+        try:
+            with c:
+                aid = _local_account(c, plan['account'], plan.get('last_four'), plan.get('account_kind'))
+                name = c.execute("SELECT name FROM accounts WHERE source='local' AND id=?", (aid,)).fetchone()[0]
+                plan['ids'] = ids = _row_ids(aid, plan['rows'])
+                existing = {r[0] for r in c.execute("SELECT id FROM tx WHERE source='local' AND account=?", (aid,))}
+                added = 0
+                for r, i in zip(plan['rows'], ids):
+                    if i in existing:
+                        continue
+                    existing.add(i)
+                    added += 1
+                    c.execute("INSERT INTO tx VALUES ('local',?,?,?,?,?,NULL,?,'posted',?)", (i, aid, r['date'], r['amount'],
+                              r['description'] or 'Transaction', r['category'], now))
+                    c.execute('INSERT OR REPLACE INTO local_meta VALUES (?,?,?,?)', (i, 'file', plan['filename'], now))
+                maps = _setting(c, 'import_maps') or {}
+                maps.pop(plan['signature'], None)
+                maps[plan['signature']] = {'mapping': plan['mapping'], 'account': name, 'at': now}
+                _set(c, 'import_maps', dict(list(maps.items())[-50:]))
+        finally:
+            c.close()
+    rows = plan['rows']
+    return {'ok': True, 'account': name, 'account_id': aid, 'imported': added, 'duplicates': len(rows) - added, 'total': len(rows),
+            'first': min(r['date'] for r in rows), 'last': max(r['date'] for r in rows)}
 
 
 # ---------------- MCP ----------------
@@ -1658,10 +2089,10 @@ TOOLS = [
                      'ids': {'type': 'array', 'items': {'type': 'integer'}}}, 'required': ['action'], 'additionalProperties': False}},
     {'name': 'money_overview', 'description': "Finances app overview: which bank connection it reads (SimpleFIN by default), attention (banks that stopped updating or need reconnecting, or Finances unable to refresh; tell the owner first), its accounts with balances, manual accounts (e.g. Bitcoin cold storage), imported history, how many transactions still need review, categories and auto-category rules, last sync.",
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}, 'annotations': {'readOnlyHint': True}},
-    {'name': 'money_transactions', 'description': "Search transactions with the owner's categories, merchant names, notes and reviewed state applied. Filters: from/to (YYYY-MM-DD), account (id, last digits or name), search, category, reviewed (true/false), min_amount/max_amount, direction (out = money out, in = money in), kind (transfer = only rows whose category kind is transfer, the ones money out/in leave out and summary.transfers_out/transfers_in total; each row says transfer true/false), origin (bank = live connection, import = imported history), min_abs (size at least, in or out), sort (newest default, oldest, largest = biggest amounts first in or out, smallest, merchant/account/category A-Z or *_desc Z-A, spend = costs the most first, income = biggest money in first), limit (default 200). Each row says its origin. Negative = money out.",
+    {'name': 'money_transactions', 'description': "Search transactions with the owner's categories, merchant names, notes and reviewed state applied. Filters: from/to (YYYY-MM-DD), account (id, last digits or name), search, category, reviewed (true/false), min_amount/max_amount, direction (out = money out, in = money in), kind (transfer = only rows whose category kind is transfer, the ones money out/in leave out and summary.transfers_out/transfers_in total; each row says transfer true/false), origin (bank = live connection, import = imported history, local = added by hand or from a bank file the owner imported), min_abs (size at least, in or out), sort (newest default, oldest, largest = biggest amounts first in or out, smallest, merchant/account/category A-Z or *_desc Z-A, spend = costs the most first, income = biggest money in first), limit (default 200). Each row says its origin. Negative = money out.",
      'inputSchema': {'type': 'object', 'properties': {'from': {'type': 'string'}, 'to': {'type': 'string'}, 'account': {'type': 'string'}, 'search': {'type': 'string'}, 'category': {'type': 'string'},
                      'reviewed': {'type': 'boolean'}, 'min_amount': {'type': 'number'}, 'max_amount': {'type': 'number'}, 'limit': {'type': 'integer'},
-                     'direction': {'type': 'string', 'enum': ['out', 'in']}, 'kind': {'type': 'string', 'enum': ['transfer']}, 'min_abs': {'type': 'number'}, 'origin': {'type': 'string', 'enum': ['bank', 'import']},
+                     'direction': {'type': 'string', 'enum': ['out', 'in']}, 'kind': {'type': 'string', 'enum': ['transfer']}, 'min_abs': {'type': 'number'}, 'origin': {'type': 'string', 'enum': ['bank', 'import', 'local']},
                      'sort': {'type': 'string', 'enum': ['newest', 'oldest', 'largest', 'smallest', 'merchant', 'merchant_desc', 'account', 'account_desc', 'category', 'category_desc', 'spend', 'income']}}, 'additionalProperties': False},
      'annotations': {'readOnlyHint': True}},
     {'name': 'money_spending', 'description': 'Spending by category for a month (YYYY-MM, default this month); refunds and credits net against their category; transfers and card payments excluded.',
@@ -1683,6 +2114,12 @@ TOOLS = [
      'annotations': {'readOnlyHint': False, 'destructiveHint': False}},
 ]
 
+LOCAL_TOOL = {'name': 'money_add_transaction', 'description': "Add one transaction by hand to Finances (for money no bank connection sees, e.g. cash): date (YYYY-MM-DD, default today), amount (negative = money out), payee, optional category, note and account (default Cash). It goes through the same review, categories, rules and spending. List them with money_transactions origin local. Only when the owner asked.",
+              'inputSchema': {'type': 'object', 'properties': {'date': {'type': 'string'}, 'amount': {'type': 'number'}, 'payee': {'type': 'string'},
+                              'category': {'type': 'string'}, 'note': {'type': 'string'}, 'account': {'type': 'string'}},
+                              'required': ['amount', 'payee'], 'additionalProperties': False},
+              'annotations': {'readOnlyHint': False, 'destructiveHint': False}}
+
 
 def rpc(msg):
     if not isinstance(msg, dict):
@@ -1694,14 +2131,14 @@ def rpc(msg):
         if m == 'initialize':
             r = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': APP_ID, 'version': VERSION}}
         elif m == 'tools/list':
-            r = {'tools': TOOLS}
+            r = {'tools': TOOLS + ([LOCAL_TOOL] if switch_on(OFFLINE) else [])}
         elif m == 'tools/call':
             a, n = p.get('arguments') or {}, p.get('name')
             fn = {'money_overview': lambda: overview(), 'money_transactions': lambda: transactions(a),
                   'money_spending': lambda: spending(a.get('month')), 'money_update': lambda: update(a),
                   'money_manual_account': lambda: manual_save(a), 'money_net_worth': lambda: networth(),
                   'money_categories': lambda: categories_change(a), 'money_rules': lambda: rules_change(a),
-                  'money_alerts': lambda: alerts_change(a)}.get(n)
+                  'money_alerts': lambda: alerts_change(a), 'money_add_transaction': lambda: local_add(a)}.get(n)
             if not fn:
                 return {'jsonrpc': '2.0', 'id': i, 'error': {'code': -32602, 'message': 'Unknown tool.'}}
             v = fn()
@@ -1757,11 +2194,11 @@ class Handler(BaseHTTPRequestHandler):
         p = urlsplit(self.path).path
         return '/' if p == PREFIX else p[len(PREFIX):] if p.startswith(PREFIX + '/') else p
 
-    def body(self):
+    def body(self, limit=262144):
         if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
             raise Problem(415, 'Use application/json.')
         size = int(self.headers.get('Content-Length', '0') or 0)
-        if not 0 <= size <= 262144:
+        if not 0 <= size <= limit:
             raise Problem(413, 'Request too large.')
         try:
             d = json.loads(self.rfile.read(size) or b'{}')
@@ -1815,7 +2252,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(403, {'error': 'MCP is box-only.'})
                 out = rpc(self.body())
                 return self.send(202 if out is None else 200, out)
-            b = self.body()
+            b = self.body(LOCAL_MAX + 65536 if path in ('/api/local/preview', '/api/local/import') else 262144)
+            if path == '/api/local/add':
+                return self.send(200, local_add(b))
+            if path == '/api/local/delete':
+                return self.send(200, local_delete(b))
+            if path == '/api/local/preview':
+                return self.send(200, local_preview(b))
+            if path == '/api/local/import':
+                return self.send(200, local_import(b))
             if path == '/api/update':
                 return self.send(200, update(b))
             if path == '/api/categories':
@@ -1870,7 +2315,12 @@ import threading as _sw_threading
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = []
+SWITCHES = [
+    {'id': 'offline-import', 'name': 'Use Finances without a bank',
+     'description': 'Add a transaction by hand, or import a CSV / OFX / QFX file downloaded from any bank. They go through '
+                    'the same review, categories, rules and monthly spending as a connected bank.',
+     'default': False, 'issues': ['humanitylabs-org/money#29']},
+]
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}

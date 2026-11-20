@@ -22,6 +22,13 @@
         <b>Connect your bank first</b>
         <p>Finances reads your accounts from a bank connection app. Install <b>SimpleFIN</b> from the App Store, follow its four steps, and your transactions show up here.</p>
         <button type="button" class="mn-btn mn-go" id="setup-refresh">I've connected it</button>
+        <div id="setup-offline" class="mn-setup-alt" hidden>
+          <p><b>No bank connection?</b> Start right away: import a file you downloaded from your bank's website (CSV, OFX or QFX), or add spending by hand.</p>
+          <div class="mn-sheet-btns">
+            <button type="button" class="mn-btn mn-go" id="setup-import">Import a bank file</button>
+            <button type="button" class="mn-btn" id="setup-add">Add by hand</button>
+          </div>
+        </div>
       </section>
 
       <!-- Banks that stopped updating, signed out, or Finances unable to refresh: shown on every tab until fixed -->
@@ -30,6 +37,7 @@
       <section data-panel="review">
         <div class="mn-bar">
           <span class="mn-search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M20 20l-4-4"/></svg><input id="search" class="wz-input" type="search" placeholder="Search merchants, notes, categories" aria-label="Search transactions"></span>
+          <button type="button" class="mn-btn mn-addbtn" id="add-tx" aria-label="Add a transaction" title="Add a transaction" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
         </div>
         <div id="fchips" class="mn-chips mn-active"></div>
         <div id="sumbar" class="mn-sum"></div>
@@ -76,6 +84,15 @@
         <h3 class="mn-sec"><span class="mn-tag manual">Manual</span> You update these</h3>
         <div id="manual"></div>
         <button type="button" class="mn-btn mn-wide" id="add-manual">Add a manual account</button>
+        <div id="local-sec" hidden>
+          <h3 class="mn-sec"><span class="mn-tag local">Yours</span> Added by hand or from bank files</h3>
+          <div id="local"></div>
+          <div class="mn-sheet-btns">
+            <button type="button" class="mn-btn mn-go" id="local-import">Import a bank file</button>
+            <button type="button" class="mn-btn" id="local-add">Add a transaction</button>
+          </div>
+          <p class="mn-small">Download a CSV, OFX or QFX file from your bank's website and pick it here. Importing the same file again skips what's already here.</p>
+        </div>
         <div id="hist-sec"></div>
         <details class="mn-fold">
           <summary>Bank connection</summary>
@@ -119,6 +136,7 @@
       <div class="mn-sheet-btns">
         <button type="button" class="mn-btn mn-go" id="t-save">Save and mark reviewed</button>
         <button type="button" class="mn-btn" id="t-hide">Hide</button>
+        <button type="button" class="mn-btn" id="t-del" hidden>Delete</button>
         <button type="button" class="mn-btn" id="t-reply" hidden>Reply</button>
         <button type="button" class="mn-btn" id="t-close">Close</button>
       </div>
@@ -142,6 +160,48 @@
         <button type="button" class="mn-btn mn-go" id="m-save">Save</button>
         <button type="button" class="mn-btn" id="m-del" hidden>Delete</button>
         <button type="button" class="mn-btn" id="m-close">Close</button>
+      </div>
+    </dialog>
+    <!-- Add a transaction by hand (switch offline-import) -->
+    <dialog class="wz-sheet mn-dlg" id="asheet" aria-labelledby="a-title">
+      <b id="a-title" class="mn-sheet-title">Add a transaction</b>
+      <div class="mn-chips" id="a-dir" role="group" aria-label="Money out or in">
+        <button type="button" class="mn-chip on" data-dir="out" aria-pressed="true">Money out</button>
+        <button type="button" class="mn-chip" data-dir="in" aria-pressed="false">Money in</button>
+      </div>
+      <label class="mn-lab" for="a-amount">Amount</label>
+      <input id="a-amount" class="wz-input" inputmode="decimal" placeholder="0.00" autocomplete="off">
+      <label class="mn-lab" for="a-payee">Paid to (or from)</label>
+      <input id="a-payee" class="wz-input" maxlength="60" placeholder="e.g. Corner cafe" autocomplete="off">
+      <div class="mn-two">
+        <span><label class="mn-lab" for="a-date">Date</label><input id="a-date" class="wz-input" type="date"></span>
+        <span><label class="mn-lab" for="a-cat">Category</label><select id="a-cat" class="wz-input"></select></span>
+      </div>
+      <label class="mn-lab" for="a-account">Account</label>
+      <input id="a-account" class="wz-input" maxlength="60" list="a-accounts" placeholder="Cash">
+      <datalist id="a-accounts"></datalist>
+      <label class="mn-lab" for="a-note">Note</label>
+      <input id="a-note" class="wz-input" maxlength="300" placeholder="Optional">
+      <div class="mn-sheet-btns">
+        <button type="button" class="mn-btn mn-go" id="a-save">Save</button>
+        <button type="button" class="mn-btn" id="a-close">Close</button>
+      </div>
+    </dialog>
+    <!-- Import a bank file (switch offline-import) -->
+    <input type="file" id="i-file" accept=".csv,.ofx,.qfx,.txt,.tsv,text/csv" hidden>
+    <dialog class="wz-sheet mn-dlg" id="isheet" aria-labelledby="i-title">
+      <b id="i-title" class="mn-sheet-title">Import a bank file</b>
+      <p id="i-sum" class="mn-small"></p>
+      <label class="mn-lab" for="i-account">Into account</label>
+      <input id="i-account" class="wz-input" maxlength="60" list="i-accounts">
+      <datalist id="i-accounts"></datalist>
+      <div id="i-map" class="mn-imap"></div>
+      <label class="mn-check" id="i-negate-l"><input type="checkbox" id="i-negate"> <span>Purchases are positive in this file (flip the signs)</span></label>
+      <div id="i-prev" class="mn-iprev"></div>
+      <div class="mn-sheet-btns">
+        <button type="button" class="mn-btn mn-go" id="i-go">Import</button>
+        <button type="button" class="mn-btn" id="i-other">Pick another file</button>
+        <button type="button" class="mn-btn" id="i-close">Close</button>
       </div>
     </dialog>
     <!-- Sort and filter for one column of the review table -->

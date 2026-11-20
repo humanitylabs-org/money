@@ -768,3 +768,21 @@ html[data-color-scheme="light"] { --pos: color-mix(in oklch, var(--wz-success, v
 
 /* 0.16.3 Reply: a third small button beside Hide and Close in the transaction sheet */
 #sheet .mn-sheet-btns:has(#t-reply:not([hidden])) { grid-template-columns: 1fr 1fr 1fr; }
+
+/* Finances without a bank (switch offline-import) */
+.mn-setup-alt { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line-2); }
+.mn-addbtn { flex: none; width: 46px; height: 46px; padding: 0; display: grid; place-items: center; border-radius: 14px; }
+.mn-addbtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.mn-tag.local { color: var(--pos); background: color-mix(in srgb, var(--pos) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pos) 45%, transparent); }
+.mn-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mn-two > span { display: flex; flex-direction: column; min-width: 0; }
+.mn-imap { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-top: 4px; }
+.mn-imap label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 700; color: var(--ink-3); }
+.mn-iprev { margin-top: 8px; max-height: 240px; overflow: auto; border-radius: 12px; background: var(--solid-2); }
+.mn-iprev table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.mn-iprev td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.mn-iprev td.d { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mn-iprev td.a { text-align: right; font-variant-numeric: tabular-nums; }
+.mn-iprev td.a.pos { color: var(--pos); }
+.mn-tag.local-row { color: var(--pos); background: color-mix(in srgb, var(--pos) 12%, transparent); }
+.mn-imap .wz-input { height: 38px; padding: 0 8px; font-size: 13px; }
