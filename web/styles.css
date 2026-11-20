@@ -1,4 +1,4 @@
-/* Money. Solid surfaces so everything reads on any wallpaper; colours come from the skin. */
+/* Finances. Solid surfaces so everything reads on any wallpaper; colours come from the skin. */
 /* Kit colours only (no literals; tests/no-hex.sh). Positive = success role, warning = warning role, both with the kit fallbacks wizard-layout.css uses for .wz-pill. */
 :root { --pos: var(--wz-success, var(--accent)); --warn: var(--wz-warning, var(--danger)); }
 .mn-app { --base: var(--wz-base, var(--canvas)); --solid: color-mix(in srgb, var(--ink) 9%, var(--base)); --solid-2: color-mix(in srgb, var(--ink) 16%, var(--base)); }

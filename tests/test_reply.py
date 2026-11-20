@@ -29,7 +29,7 @@ class ReplyContextTests(unittest.TestCase):
     def test_payload_carries_the_facts_and_fits_the_draft_limits(self):
         r = self.m.reply_context({'source': 'wizard-simplefin', 'id': 'TRN-1'})
         self.assertEqual(r['id'], 'tx-wizard-simplefin-TRN-1')
-        self.assertEqual(r['title'], 'Money: Blue Bottle')
+        self.assertEqual(r['title'], 'Finances: Blue Bottle')
         msg = r['message']
         for want in ('Blue Bottle', '\u2212$42.50', 'Chase Sapphire …1234', 'pending', 'Coffee', 'meeting with Paul',
                      'waiting for review', 'SQ *BLUE BOTTLE', 'money_update', 'TRN-1'):

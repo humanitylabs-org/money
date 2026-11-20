@@ -1,5 +1,5 @@
 {
-  "name": "Money",
+  "name": "Finances",
   "id": "money",
   "wizard_type": "view",
   "available": true,
@@ -9,7 +9,7 @@
   "categories": [
     "finance"
   ],
-  "description": "A simple money app over your bank connection (SimpleFIN by default). Review transactions, set categories, names, notes and rules, and see spending by category. Your edits stay in Money's own database and never change the bank's data.",
+  "description": "A simple money app over your bank connection (SimpleFIN by default). Review transactions, set categories, names, notes and rules, and see spending by category. Your edits stay in Finances' own database and never change the bank's data.",
   "tipi_version": 9,
   "version": "0.16.7",
   "source": "https://github.com/oscarhenrycollins/money",

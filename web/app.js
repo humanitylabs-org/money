@@ -381,7 +381,7 @@ const closeSheet = () => closeDlg(el('sheet'));
 el('sheet').addEventListener('close', () => { cur = null; ctxCache = null; closePicker(); });
 
 /* Reply: open a fresh, unsent Chats draft with this item attached (the shared WizardApp.nav.openContextDraft).
- * Money never sends anything; the owner writes and sends from Chats. Older shells don't have it: no Reply then. */
+ * Finances never sends anything; the owner writes and sends from Chats. Older shells don't have it: no Reply then. */
 let ctxCache = null;
 const canReply = () => typeof window.WizardApp?.nav?.openContextDraft === 'function';
 function reply(ctx) {
@@ -398,11 +398,11 @@ el('t-reply').onclick = () => reply(ctxCache);
 /* An alert is already on screen in full, so its draft is built right here. */
 function alertContext(a) {
   const slug = String(a.institution || a.kind || a.title || 'alert').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'alert';
-  const lines = [`Money alert: ${a.title}`, a.message || ''];
+  const lines = [`Finances alert: ${a.title}`, a.message || ''];
   if (a.institution) lines.push(`Bank: ${a.institution}`);
   if (a.as_of) lines.push(`Last update from the bank: ${a.as_of}` + (a.days != null ? ` (${a.days} days ago)` : ''));
   if (a.fix_url) lines.push(`Where he fixes it: ${a.fix_label || 'Fix it'} (${a.fix_url})`);
-  return { id: `alert-${a.kind || 'x'}-${slug}`.slice(0, 128), title: `Money: ${a.title}`.slice(0, 1000), message: lines.filter(Boolean).join('\n').slice(0, 32000) };
+  return { id: `alert-${a.kind || 'x'}-${slug}`.slice(0, 128), title: `Finances: ${a.title}`.slice(0, 1000), message: lines.filter(Boolean).join('\n').slice(0, 32000) };
 }
 /* Esc with the category list open folds the list first, as before */
 el('sheet').addEventListener('cancel', (e) => { if (!el('t-picker').hidden) { e.preventDefault(); closePicker(); } });
@@ -708,13 +708,13 @@ function renderAccounts() {
     card_.append(hd);
     const ul = h('ul', 'mn-accts');
     for (const a of [...list].sort((x, y) => Math.abs(y.balance || 0) - Math.abs(x.balance || 0))) {
-      const li = h('li', 'mn-tap'); li.tabIndex = 0; li.title = 'Leave this account out of Money';
+      const li = h('li', 'mn-tap'); li.tabIndex = 0; li.title = 'Leave this account out of Finances';
       li.onclick = async () => {
-        if (!(await ask(`Leave ${a.name} out of Money? It disappears from transactions, spending and net worth. You can bring it back at the bottom of this tab.`, 'Leave it out'))) return;
+        if (!(await ask(`Leave ${a.name} out of Finances? It disappears from transactions, spending and net worth. You can bring it back at the bottom of this tab.`, 'Leave it out'))) return;
         try { ov = await api('api/accounts/hide', { account: a.id, hidden: true }); say(`${a.name} hidden.`, 'note'); refresh(); } catch (e) { say(e.message, 'error'); }
       };
       // A visible control for the same action (never tap-the-row only)
-      const off = h('button', 'mn-off'); off.type = 'button'; off.setAttribute('aria-label', `Leave ${a.name} out of Money`); off.title = 'Leave out of Money';
+      const off = h('button', 'mn-off'); off.type = 'button'; off.setAttribute('aria-label', `Leave ${a.name} out of Finances`); off.title = 'Leave out of Finances';
       off.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18 M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7a13 13 0 0 1-3.2 4.3 M6.6 6.6A13 13 0 0 0 2 12c1 2.5 5 7 10 7a10 10 0 0 0 4.4-1 M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
       off.onclick = (e) => { e.stopPropagation(); li.onclick(); };
       const b = a.balance || 0;
@@ -739,7 +739,7 @@ function renderAccounts() {
   } else mb.append(h('p', 'mn-small mn-pad', 'For things no bank connection can see, like a cold-storage Bitcoin wallet.'));
   const hs = el('hist-sec'); hs.replaceChildren();
   if (ov.hidden_accounts?.length) {
-    hs.append(h('h3', 'mn-sec', 'Left out of Money'));
+    hs.append(h('h3', 'mn-sec', 'Left out of Finances'));
     const card = h('div', 'mn-bank'); const ul = h('ul', 'mn-accts');
     for (const a of ov.hidden_accounts) {
       const li = h('li'); const n = h('span', 'mn-row-n'); n.append(h('b', '', a.name), h('small', '', a.institution || ''));

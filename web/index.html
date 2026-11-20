@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
-  <title>Money</title>
+  <title>Finances</title>
   <script src="boot.js"></script>
   <script src="/wizard-os-home/core/app-client.js"></script>
   <link rel="stylesheet" href="wizard-ui.css">
@@ -20,11 +20,11 @@
       <!-- No bank connection yet -->
       <section id="setup" class="mn-setup" hidden>
         <b>Connect your bank first</b>
-        <p>Money reads your accounts from a bank connection app. Install <b>SimpleFIN</b> from the App Store, follow its four steps, and your transactions show up here.</p>
+        <p>Finances reads your accounts from a bank connection app. Install <b>SimpleFIN</b> from the App Store, follow its four steps, and your transactions show up here.</p>
         <button type="button" class="mn-btn mn-go" id="setup-refresh">I've connected it</button>
       </section>
 
-      <!-- Banks that stopped updating, signed out, or Money unable to refresh: shown on every tab until fixed -->
+      <!-- Banks that stopped updating, signed out, or Finances unable to refresh: shown on every tab until fixed -->
       <section id="alerts" class="mn-alerts" role="alert" hidden></section>
 
       <section data-panel="review">
@@ -80,7 +80,7 @@
         <details class="mn-fold">
           <summary>Bank connection</summary>
           <div class="mn-set">
-            <p class="mn-small">Money reads from one bank connection at a time. Your reviews, categories and notes are kept separately for each.</p>
+            <p class="mn-small">Finances reads from one bank connection at a time. Your reviews, categories and notes are kept separately for each.</p>
             <div id="sources"></div>
             <p class="mn-small" id="sync-note"></p>
             <button type="button" class="mn-btn mn-sm" id="sync">Refresh now</button>
