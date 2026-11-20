@@ -1,4 +1,4 @@
-"""Money: a simple Monarch-style money app over the box's bank connections.
+"""Finances (app id money): a simple Monarch-style money app over the box's bank connections.
 
 Reads accounts and transactions from whichever bank-connection apps are installed (SimpleFIN by default; Monarch
 and Teller also work) and keeps the owner's own layer on top in its own database: reviewed state, categories,
@@ -831,7 +831,7 @@ def reply_context(args):
         name = t.get('merchant') or t.get('description') or 'Transaction'
         inst, an, l4 = t.get('institution') or '', t.get('account_name') or '', t.get('last_four') or ''
         acct = ' '.join(x for x in (inst if inst.lower() not in an.lower() else '', an, f'…{l4}' if l4 and l4 not in an else '') if x)
-        lines = [f"Money transaction: {name}, {_amount_text(t.get('amount'), cur)} on {t.get('date')}"
+        lines = [f"Finances transaction: {name}, {_amount_text(t.get('amount'), cur)} on {t.get('date')}"
                  + (' (pending, may still change)' if t.get('status') == 'pending' else '') + '.']
         if acct:
             lines.append(f'Card/account: {acct}')
@@ -852,8 +852,8 @@ def reply_context(args):
         if others:
             lines.append(f'\nOther recent {name} transactions:')
             lines += [f"- {r['date']}: {_amount_text(r.get('amount'), cur)}, {r.get('category') or 'Uncategorized'}" for r in others]
-        lines.append(f"\nIn Money: source {t['source']!r}, id {t['id']!r}. Change it with money_update only when Miguel asks.")
-        return {'id': _draft_id('tx', f"{t['source']}-{t['id']}"), 'title': f'Money: {name}'[:200], 'message': '\n'.join(lines)[:32000]}
+        lines.append(f"\nIn Finances: source {t['source']!r}, id {t['id']!r}. Change it with money_update only when Miguel asks.")
+        return {'id': _draft_id('tx', f"{t['source']}-{t['id']}"), 'title': f'Finances: {name}'[:200], 'message': '\n'.join(lines)[:32000]}
     finally:
         c.close()
 
@@ -1379,12 +1379,12 @@ def attention(c, src, allaccts, visible):
     out = []
     err, last = _setting(c, 'last_error'), _setting(c, 'last_sync')
     if err:
-        out.append({'kind': 'sync', 'institution': None, 'title': f"Money can't refresh from {name}",
+        out.append({'kind': 'sync', 'institution': None, 'title': f"Finances can't refresh from {name}",
                     'message': err, 'fix_url': app, 'fix_label': f'Open {name}'})
     elif last and not SYNCING.is_set():
         hrs = (dt.datetime.now(dt.timezone.utc) - dt.datetime.strptime(last, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)).total_seconds() / 3600
         if hrs > STALE_SYNC_HOURS:
-            out.append({'kind': 'sync', 'institution': None, 'title': f"Money hasn't refreshed in {int(hrs)} hours",
+            out.append({'kind': 'sync', 'institution': None, 'title': f"Finances hasn't refreshed in {int(hrs)} hours",
                         'message': f'Last refresh {last[:16].replace("T", " ")} UTC. Tap Refresh now on the Accounts tab.', 'fix_url': None, 'fix_label': None})
     health = _setting(c, 'health') or {}
     if health.get('source') != src:
@@ -1606,7 +1606,7 @@ def alerts_change(a):
                 _set(c, 'alerts', cfg)
                 c.commit()
         elif action == 'test':
-            ok = notify_owner('Money alerts are on', f"You'll hear from Money when a bank needs you or a charge of "
+            ok = notify_owner('Finances alerts are on', f"You'll hear from Finances when a bank needs you or a charge of "
                               f"{_amount_text(-cfg['large']).lstrip(chr(0x2212))} or more comes in.")
             return {**cfg, 'test_sent': ok, 'note': None if ok else "Couldn't reach the Notifications app."}
         elif action != 'get':
@@ -1648,15 +1648,15 @@ def overview():
 # ---------------- MCP ----------------
 
 TOOLS = [
-    {'name': 'money_categories', 'description': "Change the owner's categories in Money only (never the bank or Monarch): action add (name, kind?), kind (name, kind = expense/income/transfer), group (name, group heading, optional position for order), merge (name into another: every transaction and rule moves, the old one disappears), delete (unused only). Only when the owner asked.",
+    {'name': 'money_categories', 'description': "Change the owner's categories in Finances only (never the bank or Monarch): action add (name, kind?), kind (name, kind = expense/income/transfer), group (name, group heading, optional position for order), merge (name into another: every transaction and rule moves, the old one disappears), delete (unused only). Only when the owner asked.",
      'inputSchema': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': ['add', 'kind', 'group', 'merge', 'delete']}, 'name': {'type': 'string'}, 'group': {'type': 'string'}, 'position': {'type': 'integer'},
                      'into': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['expense', 'income', 'transfer']}}, 'required': ['action', 'name'], 'additionalProperties': False}},
-    {'name': 'money_rules', 'description': "Add or delete auto-category rules in Money only. add: match text, category, optional merchant, min_abs/max_abs (size of the amount) and days ('25-5' = 25th through the 5th); split_category + split_amount sends that fixed amount of each charge to split_category and the rest to category. The most specific matching rule wins. delete: ids. Only when the owner asked.",
+    {'name': 'money_rules', 'description': "Add or delete auto-category rules in Finances only. add: match text, category, optional merchant, min_abs/max_abs (size of the amount) and days ('25-5' = 25th through the 5th); split_category + split_amount sends that fixed amount of each charge to split_category and the rest to category. The most specific matching rule wins. delete: ids. Only when the owner asked.",
      'inputSchema': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': ['add', 'delete']}, 'match': {'type': 'string'}, 'category': {'type': 'string'},
                      'merchant': {'type': 'string'}, 'min_abs': {'type': 'number'}, 'max_abs': {'type': 'number'}, 'days': {'type': 'string'},
                      'split_category': {'type': 'string'}, 'split_amount': {'type': 'number'},
                      'ids': {'type': 'array', 'items': {'type': 'integer'}}}, 'required': ['action'], 'additionalProperties': False}},
-    {'name': 'money_overview', 'description': "Money app overview: which bank connection it reads (SimpleFIN by default), attention (banks that stopped updating or need reconnecting, or Money unable to refresh; tell the owner first), its accounts with balances, manual accounts (e.g. Bitcoin cold storage), imported history, how many transactions still need review, categories and auto-category rules, last sync.",
+    {'name': 'money_overview', 'description': "Finances app overview: which bank connection it reads (SimpleFIN by default), attention (banks that stopped updating or need reconnecting, or Finances unable to refresh; tell the owner first), its accounts with balances, manual accounts (e.g. Bitcoin cold storage), imported history, how many transactions still need review, categories and auto-category rules, last sync.",
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}, 'annotations': {'readOnlyHint': True}},
     {'name': 'money_transactions', 'description': "Search transactions with the owner's categories, merchant names, notes and reviewed state applied. Filters: from/to (YYYY-MM-DD), account (id, last digits or name), search, category, reviewed (true/false), min_amount/max_amount, direction (out = money out, in = money in), kind (transfer = only rows whose category kind is transfer, the ones money out/in leave out and summary.transfers_out/transfers_in total; each row says transfer true/false), origin (bank = live connection, import = imported history), min_abs (size at least, in or out), sort (newest default, oldest, largest = biggest amounts first in or out, smallest, merchant/account/category A-Z or *_desc Z-A, spend = costs the most first, income = biggest money in first), limit (default 200). Each row says its origin. Negative = money out.",
      'inputSchema': {'type': 'object', 'properties': {'from': {'type': 'string'}, 'to': {'type': 'string'}, 'account': {'type': 'string'}, 'search': {'type': 'string'}, 'category': {'type': 'string'},
@@ -1677,7 +1677,7 @@ TOOLS = [
      'inputSchema': {'type': 'object', 'properties': {'id': {'type': 'string'}, 'name': {'type': 'string'}, 'kind': {'type': 'string', 'enum': ['btc', 'usd']}, 'amount': {'type': 'number'}, 'note': {'type': 'string'}},
                      'required': ['name', 'kind', 'amount'], 'additionalProperties': False},
      'annotations': {'readOnlyHint': False, 'destructiveHint': False}},
-    {'name': 'money_alerts', 'description': "Money's own notifications to the owner (sent by the app, no agent needed): a bank that needs him (signed out, stopped updating, Money can't refresh) and any charge at or above 'large' (default 500). action get (current settings), set (on true/false, large = charge size), test (sends one test notification). Change only when the owner asks.",
+    {'name': 'money_alerts', 'description': "Finances' own notifications to the owner (sent by the app, no agent needed): a bank that needs him (signed out, stopped updating, Finances can't refresh) and any charge at or above 'large' (default 500). action get (current settings), set (on true/false, large = charge size), test (sends one test notification). Change only when the owner asks.",
      'inputSchema': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': ['get', 'set', 'test']}, 'on': {'type': 'boolean'}, 'large': {'type': 'number'}},
                      'additionalProperties': False},
      'annotations': {'readOnlyHint': False, 'destructiveHint': False}},

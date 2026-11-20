@@ -2,5 +2,5 @@
   "request": "A simple Monarch-style money app over my bank connections",
   "template": "hello-wizard",
   "state": "public",
-  "name": "Money"
+  "name": "Finances"
 }
