@@ -25,9 +25,11 @@ for old, new in swaps:
 # Linux caps one command-line argument at 128 KiB: ship the inlined files zlib-compressed.
 import base64, json, zlib
 head = "files=json.loads(base64.b64decode('"
-i = t.index(head) + len(head); j = t.index("'))", i)
-packed = base64.b64encode(zlib.compress(base64.b64decode(t[i:j]), 9)).decode()
-t = t[:i - len(head)] + "import zlib\\nfiles=json.loads(zlib.decompress(base64.b64decode('" + packed + "')))" + t[j + 3:]
+if head in t:   # older wam: plain base64; newer wam packs it with zlib itself
+    i = t.index(head) + len(head); j = t.index("'))", i)
+    packed = base64.b64encode(zlib.compress(base64.b64decode(t[i:j]), 9)).decode()
+    t = t[:i - len(head)] + "import zlib\\nfiles=json.loads(zlib.decompress(base64.b64decode('" + packed + "')))" + t[j + 3:]
+assert 'zlib.decompress(base64.b64decode(' in t, 'inline payload is not zlib-packed'
 assert max(len(l) for l in t.splitlines()) < 120000, 'inline payload still too large'
 assert '/data/private' in t and '@sha256:' in t and '8799' not in t
 p.write_text(t)

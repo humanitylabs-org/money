@@ -1,6 +1,7 @@
 ---
 wizard: 0.2
-id: money
+id: finances
+renamed_from: [money]
 name: Finances
 type: view
 category: app

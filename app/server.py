@@ -1,4 +1,4 @@
-"""Finances (app id money): a simple Monarch-style money app over the box's bank connections.
+"""Finances (app id finances, was money): a simple Monarch-style money app over the box's bank connections.
 
 Reads accounts and transactions from whichever bank-connection apps are installed (SimpleFIN by default; Monarch
 and Teller also work) and keeps the owner's own layer on top in its own database: reviewed state, categories,
@@ -23,7 +23,9 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
-APP_ID = 'money'
+APP_ID = 'finances'
+# The app was Money (id money, at /money/) until 0.16.10 (money#28): old links and bookmarks still land here.
+OLD_IDS = ('money',)
 VERSION = '0.16.9'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
@@ -707,7 +709,7 @@ def transactions(args, c=None):
     c = c or db()
     try:
         src = active_source(c)
-        local = switch_on(OFFLINE)   # money:offline-import: hand-added and bank-file rows sit beside the bank's
+        local = switch_on(OFFLINE)   # finances:offline-import: hand-added and bank-file rows sit beside the bank's
         q, p = [SELECT + (" WHERE t.source IN (?, 'import', 'local')" if local else " WHERE t.source IN (?, 'import')")], [src]
         if args.get('origin') == 'bank':
             q.append('AND t.source=?'); p.append(src)
@@ -1488,7 +1490,7 @@ def _open_link():
     # with no port is the last resort, since the shell usually lives on its own port.
     listed = [x.strip() for x in os.environ.get('WIZARD_TRUSTED_ORIGINS', '').split(',') if x.strip().startswith('https://')]
     listed.sort(key=lambda o: urlsplit(o).port is None)
-    return listed[0].rstrip('/') + '/wizard-os-home/?open=money' if listed else ''
+    return listed[0].rstrip('/') + f'/wizard-os-home/?open={APP_ID}' if listed else ''
 
 
 def notify_owner(title, message, priority='default', tags=''):
@@ -1662,7 +1664,7 @@ def overview():
     return out
 
 
-# ---------------- without a bank: hand-added transactions and bank files (switch money:offline-import) ----------------
+# ---------------- without a bank: hand-added transactions and bank files (switch finances:offline-import) ----------------
 # Rows live in tx/accounts under source 'local', so review, categories, rules, splits, spending and the inbox treat them
 # exactly like a connected bank's. A bank connection is never touched. Each file row's id is a hash of the account, date,
 # amount, text and how many identical rows came before it in the same file (or the OFX FITID), so re-importing the same
@@ -2160,7 +2162,7 @@ def _csv(name):
     return {x.strip().lower() for x in os.environ.get(name, '').split(',') if x.strip()}
 
 
-_LOOPBACK = {f'127.0.0.1:{PORT}', f'localhost:{PORT}', f'{APP_ID}:{PORT}'}
+_LOOPBACK = {f'127.0.0.1:{PORT}', f'localhost:{PORT}', f'{APP_ID}:{PORT}', *(f'{o}:{PORT}' for o in OLD_IDS)}
 TRUSTED_HOSTS = _csv('WIZARD_TRUSTED_HOSTS') | _LOOPBACK
 TRUSTED_ORIGINS = _csv('WIZARD_TRUSTED_ORIGINS') | {'http://' + h for h in _LOOPBACK}
 CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
@@ -2192,7 +2194,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self):
         p = urlsplit(self.path).path
-        return '/' if p == PREFIX else p[len(PREFIX):] if p.startswith(PREFIX + '/') else p
+        for pre in (PREFIX, *('/' + o for o in OLD_IDS)):
+            if p == pre or p.startswith(pre + '/'):
+                return p[len(pre):] or '/'
+        return p
+
+    def old_page(self):
+        """A page asked for under the app's old address (/money/...): where it lives now (/finances/...), else None.
+        Only pages move: API calls under the old prefix are still answered, so nothing in flight breaks."""
+        u = urlsplit(self.path)
+        for o in OLD_IDS:
+            pre = '/' + o
+            if u.path == pre or u.path.startswith(pre + '/'):
+                rest = u.path[len(pre):] or '/'
+                if rest.startswith('/api/') or rest in ('/mcp', '/healthz', '/openapi.json'):
+                    return None
+                return PREFIX + rest + ('?' + u.query if u.query else '')
+        return None
 
     def body(self, limit=262144):
         if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -2215,6 +2233,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.refused():
             return
         path, q = self.route(), {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        if (moved := self.old_page()):
+            self.send_response(302)
+            self.send_header('Location', moved)
+            self.send_header('Content-Length', '0')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return
         try:
             if path in ('/healthz', '/api/health'):
                 return self.send(200, {'ok': True, 'app': APP_ID, 'version': VERSION})
