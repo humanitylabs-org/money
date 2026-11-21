@@ -26,6 +26,7 @@ class AlertTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.m = load(self.tmp.name)
         self.posts = []
+        self.links = []
         self.ok = True
         c = self.m.db()
         today = dt.date.today()
@@ -38,9 +39,10 @@ class AlertTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def post(self, title, message, priority='default', tags=''):
+    def post(self, title, message, priority='default', tags='', link=None):
         if self.ok:
             self.posts.append((title, message, priority, tags))
+            self.links.append(link)
         return self.ok
 
     def tx(self, tid, amount, merchant, days_ago=0, category=None):
@@ -178,6 +180,59 @@ class AlertTests(unittest.TestCase):
         finally:
             os.environ.pop('WIZARD_TRUSTED_ORIGINS')
         self.assertEqual(self.m._open_link(), '')
+
+    def test_problem_alerts_link_to_where_the_owner_fixes_them(self):
+        os.environ['WIZARD_TRUSTED_ORIGINS'] = 'https://box.ts.net:8796'
+        try:
+            c = self.m.db()
+            with c:
+                self.m._set(c, 'health', {'source': 'wizard-simplefin', 'error': 'Failed to get complete transaction set',
+                                          'banks': [{'institution': 'Chase', 'status': 'disconnected'}]})
+            c.close()
+            self.run_check()
+            got = {t: l for (t, *_), l in zip(self.posts, self.links)}
+            self.assertEqual(got['SimpleFIN needs attention'], 'https://box.ts.net:8796/wizard-os-home/?open=wizard-simplefin')
+            self.assertEqual(got['Chase needs you to reconnect'], 'https://beta-bridge.simplefin.org/')
+            c = self.m.db()
+            with c:
+                self.m._set(c, 'health', {'source': 'wizard-simplefin', 'banks': []})
+                c.execute("UPDATE accounts SET balance_at=?", ((self.today - dt.timedelta(days=6)).isoformat(),))
+            c.close()
+            self.posts.clear(); self.links.clear()
+            self.run_check()
+            self.assertEqual(self.posts[0][0], 'Chase stopped updating')
+            self.assertEqual(self.links, ['https://beta-bridge.simplefin.org/'])
+            self.posts.clear(); self.links.clear()
+            self.tx('t9', -900, 'Apple Store')
+            self.run_check()
+            self.assertEqual([p[0] for p in self.posts], ['Large charge']); self.assertEqual(self.links, [None])
+            self.assertEqual(self.m._fix_link(None), None)
+            self.assertEqual(self.m._open_link(), 'https://box.ts.net:8796/wizard-os-home/?open=finances')
+        finally:
+            os.environ.pop('WIZARD_TRUSTED_ORIGINS')
+
+    def test_notify_owner_sends_the_given_link_else_the_finances_link(self):
+        got = []
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                got.append(json.loads(self.rfile.read(int(self.headers['Content-Length'])))['params']['arguments'])
+                body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'content': [], 'isError': False}}).encode()
+                self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = ThreadingHTTPServer(('127.0.0.1', 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        os.environ['WIZARD_TRUSTED_ORIGINS'] = 'https://box.ts.net:8796'
+        try:
+            self.m.NOTIFY_URL = f'http://127.0.0.1:{srv.server_port}/mcp'
+            self.assertTrue(self.m.notify_owner('t', 'x', link='https://beta-bridge.simplefin.org/'))
+            self.assertTrue(self.m.notify_owner('t', 'x'))
+            self.assertEqual([a['link'] for a in got], ['https://beta-bridge.simplefin.org/', 'https://box.ts.net:8796/wizard-os-home/?open=finances'])
+        finally:
+            os.environ.pop('WIZARD_TRUSTED_ORIGINS')
+            srv.shutdown()
 
     def test_mcp_lists_and_runs_money_alerts(self):
         names = [t['name'] for t in self.m.TOOLS]

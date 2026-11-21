@@ -1485,15 +1485,26 @@ def alert_settings(c):
     return {'on': s.get('on', True) is not False, 'large': float(s.get('large') or ALERT_LARGE)}
 
 
-def _open_link():
+def _open_link(app_id=None):
     # The owner's own first listed shell origin (env order: the box lists its main shell first); a bare https host
     # with no port is the last resort, since the shell usually lives on its own port.
     listed = [x.strip() for x in os.environ.get('WIZARD_TRUSTED_ORIGINS', '').split(',') if x.strip().startswith('https://')]
     listed.sort(key=lambda o: urlsplit(o).port is None)
-    return listed[0].rstrip('/') + f'/wizard-os-home/?open={APP_ID}' if listed else ''
+    return listed[0].rstrip('/') + f'/wizard-os-home/?open={app_id or APP_ID}' if listed else ''
 
 
-def notify_owner(title, message, priority='default', tags=''):
+def _fix_link(fix_url):
+    """Where a problem alert's tap goes: the place its fix_label names. An app path ('/wizard-simplefin/') opens that
+    app in the shell, an https page (the bank bridge) as is; nothing (or anything else) keeps the Finances link."""
+    m = re.fullmatch(r'/([a-z0-9][a-z0-9-]*)/', fix_url or '')
+    if m:
+        return _open_link(m.group(1))
+    if (fix_url or '').startswith('https://'):
+        return fix_url
+    return None
+
+
+def notify_owner(title, message, priority='default', tags='', link=None):
     """One notification through the Notifications app. True only when it answered that it was sent."""
     u = urlsplit(NOTIFY_URL)
     if u.scheme != 'http' or u.username or u.password or not u.hostname:
@@ -1501,7 +1512,7 @@ def notify_owner(title, message, priority='default', tags=''):
     args = {'title': title[:120], 'message': message[:600], 'priority': priority, 'app': APP_ID}
     if tags:
         args['tags'] = tags
-    link = _open_link()
+    link = link or _open_link()
     if link:
         args['link'] = link
     body = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': 'notify', 'arguments': args}}).encode()
@@ -1561,7 +1572,8 @@ def check_alerts(post=None, now=None):
         if last and now - last < ALERT_REMIND_DAYS * 86400:
             keep[k] = last
             continue
-        if post(p['title'], p['message'] + (f" Fix: {p['fix_label']}." if p.get('fix_label') else ''), 'high', 'needs-you'):
+        if post(p['title'], p['message'] + (f" Fix: {p['fix_label']}." if p.get('fix_label') else ''), 'high', 'needs-you',
+                link=_fix_link(p.get('fix_url'))):
             keep[k] = now
             sent.append(k)
         else:
