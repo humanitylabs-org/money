@@ -5,12 +5,13 @@ renamed_from: [money]
 name: Finances
 type: view
 category: app
-version: 0.16.11
+version: 0.16.12
 summary: Review transactions, set categories and rules, and see spending and net worth over your bank connection.
 tags: [finance]
 license: GPL-3.0-only
 source: https://github.com/oscarhenrycollins/money
 runtime:
+  package: source
   kind: runtipi
   config: runtipi/config.json
   compose: runtipi/docker-compose.yml
