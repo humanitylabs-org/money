@@ -5,7 +5,7 @@ renamed_from: [money]
 name: Finances
 type: view
 category: app
-version: 0.16.13
+version: 0.16.14
 summary: Review transactions, set categories and rules, and see spending and net worth over your bank connection.
 tags: [finance]
 license: GPL-3.0-only
