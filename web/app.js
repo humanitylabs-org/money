@@ -49,15 +49,11 @@ function paintOverview(data) {
   const ready = ov.transactions > 0 || ov.accounts.length > 0;
   const anyConnected = ov.sources.some((s) => s.connected);
   el('setup').hidden = ready || anyConnected || ov.syncing;
-  /* switch offline-import: no bank needed; import a bank file or add by hand */
-  el('setup-offline').hidden = !ov.offline;
-  el('add-tx').hidden = !ov.offline;
-  el('local-sec').hidden = !ov.offline;
   el('badge').hidden = !ov.to_review; el('badge').textContent = ov.to_review > 99 ? '99+' : ov.to_review;
   try { window.WizardApp?.badge?.set(ov.to_review); } catch (e) {}
   renderAlerts();
   renderAccounts();
-  if (ov.offline) renderLocal();
+  renderLocal();
   clearTimeout(poll);
   if (ov.syncing) poll = setTimeout(() => refresh(), 4000);
   if (tab === 'review') renderFilterChips();
@@ -99,7 +95,7 @@ function groups() {
   ];
   const srcs = [['', 'Everywhere'], ['bank', 'From ' + ov?.source_name]];
   if (ov?.history) srcs.push(['import', ov.history.from_name + ' history']);
-  if (ov?.offline) srcs.push(['local', 'Added by you']);
+  srcs.push(['local', 'Added by you']);
   if (srcs.length > 2) g.push(['origin', 'Source', srcs]);
   return g;
 }
@@ -816,7 +812,7 @@ el('m-del').onclick = async () => {
   try { await api(`api/manual/${mcur.id}/delete`, {}); closeManual(); say('Deleted.', 'note'); refresh(); } catch (e) { say(e.message, 'error'); }
 };
 
-/* ---------- without a bank (switch offline-import): add by hand, import a bank file ---------- */
+/* ---------- without a bank: add by hand, import a bank file ---------- */
 const AKEY = 'money.addacct.v1';
 let adir = 'out';
 function setDir(d) { adir = d; el('a-dir').querySelectorAll('.mn-chip').forEach((b) => { b.classList.toggle('on', b.dataset.dir === d); b.setAttribute('aria-pressed', b.dataset.dir === d ? 'true' : 'false'); }); }
