@@ -1,4 +1,4 @@
-"""Finances without a bank (switch money:offline-import): add by hand, import a CSV / OFX file, same review and spending."""
+"""Finances without a bank (#29, on for everyone): add by hand, import a CSV / OFX file, same review and spending."""
 import datetime as dt
 import json
 import tempfile
@@ -56,26 +56,26 @@ class OfflineTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def on(self, value=True):
-        (Path(self.tmp.name) / 'switches.json').write_text(json.dumps({'offline-import': value}))
-
     def f(self, tpl):
         return tpl.format(m=self.mm, y=self.y)
 
-    def test_switch_is_declared_off_by_default_and_off_changes_nothing(self):
-        sw = {s['id']: s for s in self.m.switches_doc()['switches']}
-        self.assertEqual(sw['offline-import']['on'], False)
-        self.assertEqual(sw['offline-import']['issues'], ['humanitylabs-org/money#29'])
-        with self.assertRaises(self.m.Problem):
-            self.m.local_add({'amount': -5, 'payee': 'Cafe'})
-        with self.assertRaises(self.m.Problem):
-            self.m.local_preview({'filename': 'a.csv', 'text': self.f(AMEX)})
-        self.assertNotIn('offline', self.m.overview())
+    def test_on_for_everyone_with_no_switch(self):
+        self.assertNotIn('offline-import', [s['id'] for s in self.m.switches_doc()['switches']])
+        self.assertTrue(self.m.local_add({'amount': -5, 'payee': 'Cafe'})['ok'])
+        self.assertIn('local_accounts', self.m.overview())
         tools = self.m.rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']
-        self.assertNotIn('money_add_transaction', [t['name'] for t in tools])
+        self.assertIn('money_add_transaction', [t['name'] for t in tools])
+
+    def test_stored_switch_value_is_cleared(self):
+        f = Path(self.tmp.name) / 'switches.json'
+        f.write_text(json.dumps({'offline-import': False, 'other': True}))
+        self.m._sw_forget_retired()
+        self.assertEqual(json.loads(f.read_text()), {'other': True})
+        self.assertEqual(self.m.transactions({})['total'], 0)
+        self.m.local_add({'amount': -7, 'payee': 'Cafe', 'category': 'Coffee'})
+        self.assertEqual(self.m.transactions({})['total'], 1)
 
     def test_add_by_hand_shows_in_review_and_spending(self):
-        self.on()
         t = self.m.local_add({'date': self.month + '-02', 'amount': -12.5, 'payee': 'Corner cafe', 'category': 'Coffee', 'note': 'with Ana'})['transaction']
         self.assertEqual((t['origin'], t['added'], t['origin_name'], t['category'], t['category_from'], t['reviewed']),
                          ('local', 'hand', 'Added by hand', 'Coffee', 'you', True))
@@ -89,7 +89,6 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(self.m.transactions({'origin': 'local'})['total'], 1)
 
     def test_csv_import_guesses_columns_remembers_them_and_skips_duplicates(self):
-        self.on()
         p = self.m.local_preview({'filename': 'Chase1234_Activity.CSV', 'text': self.f(CHASE_CARD)})
         self.assertEqual((p['kind'], p['known'], p['total'], p['new'], p['duplicates']), ('csv', False, 4, 4, 0))
         self.assertEqual(p['mapping']['date'], 0)
@@ -116,27 +115,23 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(sp.get('Coffee'), 10.5)
 
     def test_card_file_with_positive_charges_is_flipped(self):
-        self.on()
         p = self.m.local_preview({'filename': 'activity.csv', 'text': self.f(AMEX)})
         self.assertTrue(p['mapping']['negate'])
         self.assertEqual(p['money_out'], -450.59)
         self.assertEqual(p['money_in'], 450.59)
 
     def test_debit_and_credit_columns(self):
-        self.on()
         p = self.m.local_preview({'filename': 'capone.csv', 'text': self.f(CAPONE)})
         self.assertEqual((p['mapping']['debit'], p['mapping']['credit'], p['mapping']['amount']), (5, 6, None))
         self.assertEqual([r['amount'] for r in p['preview']], [-45.1, 200.0])
 
     def test_preamble_semicolons_and_decimal_commas(self):
-        self.on()
         p = self.m.local_preview({'filename': 'konto.csv', 'text': self.f(EURO)})
         self.assertEqual(p['headers'], ['Buchungstag', 'Empfaenger', 'Verwendungszweck', 'Betrag'])
         self.assertEqual(p['mapping']['date_format'], '%d.%m.%Y')
         self.assertEqual([r['amount'] for r in p['preview']], [-1234.56, 2500.0])
 
     def test_changed_mapping_is_used_and_remembered(self):
-        self.on()
         text = self.f(CHASE_CARD)
         p = self.m.local_preview({'filename': 'c.csv', 'text': text})
         mp = dict(p['mapping'], description=6, negate=True)
@@ -145,7 +140,6 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual((again['mapping']['description'], again['mapping']['negate']), (6, True))
 
     def test_ofx_import_uses_fitid(self):
-        self.on()
         text = self.f(OFX)
         p = self.m.local_preview({'filename': 'acme.qfx', 'text': text})
         self.assertEqual((p['kind'], p['total'], p['last_four']), ('ofx', 3, '6789'))
@@ -169,12 +163,9 @@ class OfflineTests(unittest.TestCase):
             self.m._set(c, 'last_error', 'Could not reach that bank connection app.')
         c.close()
         self.m._SRC.update(at=self.m.time.time(), list=[{'id': 'wizard-simplefin', 'name': 'SimpleFIN', 'installed': False, 'connected': False, 'banks': 0, 'last_sync': None}])
-        self.assertEqual(len(self.m.overview()['attention']), 1)   # off: as today
-        self.on()
         self.assertEqual(self.m.overview()['attention'], [])
 
     def test_agent_tool_adds_and_lists(self):
-        self.on()
         tools = self.m.rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools']
         tool = next(t for t in tools if t['name'] == 'money_add_transaction')
         self.assertFalse(tool['annotations']['readOnlyHint'])
@@ -182,12 +173,6 @@ class OfflineTests(unittest.TestCase):
         self.assertFalse(r['result']['isError'])
         r = self.m.rpc({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'money_transactions', 'arguments': {'origin': 'local'}}})
         self.assertEqual(r['result']['structuredContent']['total'], 1)
-
-    def test_bank_rows_unchanged_and_local_left_out_when_off(self):
-        self.on()
-        self.m.local_add({'amount': -7, 'payee': 'Cafe', 'category': 'Coffee'})
-        self.on(False)
-        self.assertEqual(self.m.transactions({})['total'], 0)
 
 
 if __name__ == '__main__':

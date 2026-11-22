@@ -709,8 +709,8 @@ def transactions(args, c=None):
     c = c or db()
     try:
         src = active_source(c)
-        local = switch_on(OFFLINE)   # finances:offline-import: hand-added and bank-file rows sit beside the bank's
-        q, p = [SELECT + (" WHERE t.source IN (?, 'import', 'local')" if local else " WHERE t.source IN (?, 'import')")], [src]
+        # hand-added and bank-file rows sit beside the bank's
+        q, p = [SELECT + " WHERE t.source IN (?, 'import', 'local')"], [src]
         if args.get('origin') == 'bank':
             q.append('AND t.source=?'); p.append(src)
         elif args.get('origin') == 'import':
@@ -1392,7 +1392,7 @@ def attention(c, src, allaccts, visible):
     today = dt.datetime.now(dt.timezone.utc).date()
     out = []
     err, last = _setting(c, 'last_error'), _setting(c, 'last_sync')
-    if err and switch_on(OFFLINE) and not any(s['installed'] for s in sources()):
+    if err and not any(s['installed'] for s in sources()):
         err = last = None   # no bank app at all and he uses Finances without one: nothing is broken
     if err:
         out.append({'kind': 'sync', 'institution': None, 'title': f"Finances can't refresh from {name}",
@@ -1668,20 +1668,17 @@ def overview():
                'attention': attention(c, src, allaccts, accts), 'alerts': alert_settings(c)}
     finally:
         c.close()
-    if switch_on(OFFLINE):
-        out['offline'] = True
-        out['local_accounts'] = local_accounts()
+    out['local_accounts'] = local_accounts()
     cash = sum(a['balance'] or 0 for a in accts if (a['type'] or '') in ('depository', 'checking', 'savings') or re.search(r'check|saving|ckg', (a['name'] or ''), re.I))
     out['cash'] = round(cash, 2)
     return out
 
 
-# ---------------- without a bank: hand-added transactions and bank files (switch finances:offline-import) ----------------
+# ---------------- without a bank: hand-added transactions and bank files (#29) ----------------
 # Rows live in tx/accounts under source 'local', so review, categories, rules, splits, spending and the inbox treat them
 # exactly like a connected bank's. A bank connection is never touched. Each file row's id is a hash of the account, date,
 # amount, text and how many identical rows came before it in the same file (or the OFX FITID), so re-importing the same
 # file, or an overlapping later export, skips what is already here.
-OFFLINE = 'offline-import'
 LOCAL_MAX = 8 * 1024 * 1024   # a bank file, as text
 HAND_ACCOUNT = 'Cash'
 DATE_FORMATS = [('%Y-%m-%d', 'YYYY-MM-DD'), ('%m/%d/%Y', 'MM/DD/YYYY'), ('%d/%m/%Y', 'DD/MM/YYYY'), ('%m/%d/%y', 'MM/DD/YY'),
@@ -1690,11 +1687,6 @@ DATE_FORMATS = [('%Y-%m-%d', 'YYYY-MM-DD'), ('%m/%d/%Y', 'MM/DD/YYYY'), ('%d/%m/
                 ('%d-%b-%Y', '05-Jan-2026'), ('%d-%b-%y', '05-Jan-26'), ('%b %d, %Y', 'Jan 05, 2026'), ('%b %d %Y', 'Jan 05 2026'),
                 ('%d %B %Y', '05 January 2026'), ('%B %d, %Y', 'January 05, 2026')]
 _TIME_RE = re.compile(r'(?:[ T]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*[AaPp][Mm])?(?:Z|[+-]\d{2}:?\d{2})?)$')
-
-
-def _need_offline():
-    if not switch_on(OFFLINE):
-        raise Problem(409, 'Adding transactions without a bank is switched off.')
 
 
 def _local_account(c, name, last_four=None, kind=None):
@@ -1726,7 +1718,6 @@ def local_accounts(c=None):
 
 def local_add(body):
     """One transaction typed in by hand: date, amount (negative = money out), payee, category?, note?, account?."""
-    _need_offline()
     date = str(body.get('date') or dt.date.today().isoformat())
     if not DATE_RE.match(date):
         raise Problem(400, 'date must be YYYY-MM-DD.')
@@ -1764,7 +1755,6 @@ def local_add(body):
 
 def local_delete(body):
     """Delete a hand-added transaction (bank-file rows are hidden instead, so a re-import cannot bring them back)."""
-    _need_offline()
     tid = str(body.get('id') or '')[:40]
     with LOCK:
         c = db()
@@ -2042,7 +2032,6 @@ def _summarize(plan, existing):
 
 def local_preview(body):
     """What importing this file would do, without saving anything: the column map, the first rows, new vs already here."""
-    _need_offline()
     plan = _plan(body)
     aid = 'L' + hashlib.sha1((re.sub(r'\s+', ' ', str(plan['account'] or '').strip())[:60] or HAND_ACCOUNT).lower().encode()).hexdigest()[:10]
     plan['ids'] = _row_ids(aid, plan['rows'])
@@ -2057,7 +2046,6 @@ def local_preview(body):
 def local_import(body):
     """Save a bank file's rows into one account; rows already here are skipped. The column map is remembered for
     this bank's file layout, so next time the file goes straight in."""
-    _need_offline()
     plan = _plan(body)
     if not plan['rows']:
         raise Problem(400, 'No rows could be read with these columns. Check the date and amount columns.')
@@ -2145,7 +2133,7 @@ def rpc(msg):
         if m == 'initialize':
             r = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': APP_ID, 'version': VERSION}}
         elif m == 'tools/list':
-            r = {'tools': TOOLS + ([LOCAL_TOOL] if switch_on(OFFLINE) else [])}
+            r = {'tools': TOOLS + [LOCAL_TOOL]}
         elif m == 'tools/call':
             a, n = p.get('arguments') or {}, p.get('name')
             fn = {'money_overview': lambda: overview(), 'money_transactions': lambda: transactions(a),
@@ -2352,12 +2340,8 @@ import threading as _sw_threading
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = [
-    {'id': 'offline-import', 'name': 'Use Finances without a bank',
-     'description': 'Add a transaction by hand, or import a CSV / OFX / QFX file downloaded from any bank. They go through '
-                    'the same review, categories, rules and monthly spending as a connected bank.',
-     'default': False, 'issues': ['humanitylabs-org/money#29']},
-]
+SWITCHES = []
+RETIRED_SWITCHES = {'offline-import'}   # now on for everyone (#29); its stored value is cleared at start
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}
@@ -2397,6 +2381,22 @@ def _sw_set(switch_id, on):
         tmp.write_text(_sw_json.dumps(saved))
         _sw_os.replace(tmp, f)
     return switches_doc()
+
+
+def _sw_forget_retired():
+    """Drop stored values of switches that are now always on (or gone), so switches.json only holds live ones."""
+    with _sw_lock:
+        saved = _sw_saved()
+        if not any(k in RETIRED_SWITCHES for k in saved):
+            return
+        keep = {k: v for k, v in saved.items() if k not in RETIRED_SWITCHES}
+        f = _sw_file()
+        try:
+            tmp = f.with_name(f.name + '.tmp')
+            tmp.write_text(_sw_json.dumps(keep))
+            _sw_os.replace(tmp, f)
+        except OSError:
+            pass
 
 
 def _sw_owner(h, write):
@@ -2496,6 +2496,7 @@ if __name__ == '__main__':
         except OSError:
             pass
     db().close()
+    _sw_forget_retired()
     threading.Thread(target=_sources_loop, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
     ThreadingHTTPServer((os.environ.get('BIND', '0.0.0.0'), int(PORT)), Handler).serve_forever()

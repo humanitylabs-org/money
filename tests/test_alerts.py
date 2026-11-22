@@ -25,6 +25,9 @@ class AlertTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.m = load(self.tmp.name)
+        # SimpleFIN is installed here: with no bank app at all a refresh error is not shown (Finances works without a bank, #29)
+        self.m._SRC.update(at=time.time() + 86400, list=[{'id': 'wizard-simplefin', 'name': 'SimpleFIN', 'installed': True,
+                                                          'connected': True, 'banks': 1, 'last_sync': None}])
         self.posts = []
         self.links = []
         self.ok = True

@@ -22,7 +22,7 @@
         <b>Connect your bank first</b>
         <p>Finances reads your accounts from a bank connection app. Install <b>SimpleFIN</b> from the App Store, follow its four steps, and your transactions show up here.</p>
         <button type="button" class="mn-btn mn-go" id="setup-refresh">I've connected it</button>
-        <div id="setup-offline" class="mn-setup-alt" hidden>
+        <div id="setup-offline" class="mn-setup-alt">
           <p><b>No bank connection?</b> Start right away: import a file you downloaded from your bank's website (CSV, OFX or QFX), or add spending by hand.</p>
           <div class="mn-sheet-btns">
             <button type="button" class="mn-btn mn-go" id="setup-import">Import a bank file</button>
@@ -37,7 +37,7 @@
       <section data-panel="review">
         <div class="mn-bar">
           <span class="mn-search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M20 20l-4-4"/></svg><input id="search" class="wz-input" type="search" placeholder="Search merchants, notes, categories" aria-label="Search transactions"></span>
-          <button type="button" class="mn-btn mn-addbtn" id="add-tx" aria-label="Add a transaction" title="Add a transaction" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
+          <button type="button" class="mn-btn mn-addbtn" id="add-tx" aria-label="Add a transaction" title="Add a transaction"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14 M5 12h14"/></svg></button>
         </div>
         <div id="fchips" class="mn-chips mn-active"></div>
         <div id="sumbar" class="mn-sum"></div>
@@ -84,7 +84,7 @@
         <h3 class="mn-sec"><span class="mn-tag manual">Manual</span> You update these</h3>
         <div id="manual"></div>
         <button type="button" class="mn-btn mn-wide" id="add-manual">Add a manual account</button>
-        <div id="local-sec" hidden>
+        <div id="local-sec">
           <h3 class="mn-sec"><span class="mn-tag local">Yours</span> Added by hand or from bank files</h3>
           <div id="local"></div>
           <div class="mn-sheet-btns">
@@ -162,7 +162,7 @@
         <button type="button" class="mn-btn" id="m-close">Close</button>
       </div>
     </dialog>
-    <!-- Add a transaction by hand (switch offline-import) -->
+    <!-- Add a transaction by hand -->
     <dialog class="wz-sheet mn-dlg" id="asheet" aria-labelledby="a-title">
       <b id="a-title" class="mn-sheet-title">Add a transaction</b>
       <div class="mn-chips" id="a-dir" role="group" aria-label="Money out or in">
@@ -187,7 +187,7 @@
         <button type="button" class="mn-btn" id="a-close">Close</button>
       </div>
     </dialog>
-    <!-- Import a bank file (switch offline-import) -->
+    <!-- Import a bank file -->
     <input type="file" id="i-file" accept=".csv,.ofx,.qfx,.txt,.tsv,text/csv" hidden>
     <dialog class="wz-sheet mn-dlg" id="isheet" aria-labelledby="i-title">
       <b id="i-title" class="mn-sheet-title">Import a bank file</b>
