@@ -764,6 +764,7 @@ function renderAccounts() {
     hh.append(h('span', 'mn-tag import', 'History'), ` Imported from ${ov.history.from_name}`);
     hs.append(h('p', 'mn-small mn-pad', `${ov.history.showing.toLocaleString()} past transactions from ${day(ov.history.from)}, kept for reference. Each account switches to ${ov.source_name} where its own data begins, so nothing shows twice.`));
   }
+  renderActual();
   const src = el('sources'); src.replaceChildren();
   for (const s of ov.sources) {
     const row = h('label', 'mn-src' + (s.installed ? '' : ' off'));
@@ -782,6 +783,34 @@ function renderAccounts() {
   }
   if (!ov.rules.length) rl.append(h('li', 'mn-small', 'No rules yet. Tick “Always use this” when you categorize something.'));
 }
+/* ---------- Actual Budget (switch finances:actual-budget) ---------- */
+function renderActual() {
+  const a = ov.actual; el('actual-sec').hidden = !a;
+  if (!a) return;
+  const line = el('actual-line');
+  line.classList.toggle('mn-actual-err', !!a.error && !a.ready);
+  line.textContent = a.error && !a.ready ? `Actual Budget isn't ready yet: ${a.error} Finances keeps working on its own copy meanwhile.`
+    : `Your accounts, transactions, categories and rules are kept in Actual Budget on this Wizard, in its budget “${a.budget}”. Finances shows them as before.${a.last_copy ? ' Last copied ' + when(a.last_copy) + '.' : ''}${a.error ? ' Last try: ' + a.error : ''}`;
+  const n = el('actual-counts'); n.replaceChildren();
+  if (a.ready) for (const [k, label] of [['accounts', 'Accounts'], ['transactions', 'Transactions'], ['categories', 'Categories'], ['rules', 'Rules']]) {
+    const li = h('li'); li.append(h('b', '', (a.counts[k] || 0).toLocaleString()), h('small', '', label)); n.append(li);
+  }
+  const b = a.bank || {};
+  el('actual-bank-line').textContent = b.configured
+    ? `SimpleFIN runs through Actual Budget${b.accounts ? ` (${b.accounts} account${b.accounts === 1 ? '' : 's'})` : ''}${b.last_fetch ? ', last fetched ' + when(b.last_fetch) : ''}.${b.error ? ' ' + b.error : ''}`
+    : 'Bank data still comes from the SimpleFIN app. To let Actual Budget fetch it with its own SimpleFIN sync, make a new setup token on SimpleFIN and paste it here. Finances never shows it again.';
+  el('actual-token').hidden = !!b.configured; el('actual-forget').hidden = !b.configured;
+}
+el('actual-token-go').onclick = async () => {
+  const t = el('actual-token-in').value.trim(); if (!t) { say('Paste the setup token first.', 'error'); return; }
+  el('actual-token-go').disabled = true;
+  try { ov = await api('api/actual/simplefin', { token: t }); el('actual-token-in').value = ''; say('Actual Budget now syncs your banks through SimpleFIN.', 'note'); refresh(); }
+  catch (e) { say(e.message, 'error'); } finally { el('actual-token-go').disabled = false; }
+};
+el('actual-forget').onclick = async () => {
+  if (!(await ask('Stop SimpleFIN bank sync in Actual Budget? Your data stays; bank data comes from the SimpleFIN app again.', 'Stop'))) return;
+  try { ov = await api('api/actual/simplefin/forget', {}); say('Bank sync is back on the SimpleFIN app.', 'note'); refresh(); } catch (e) { say(e.message, 'error'); }
+};
 /* ---------- manual accounts ---------- */
 let mcur = null, mkind = 'btc';
 function setKind(k) {

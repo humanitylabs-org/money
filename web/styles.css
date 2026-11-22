@@ -786,3 +786,16 @@ html[data-color-scheme="light"] { --pos: color-mix(in oklch, var(--wz-success, v
 .mn-iprev td.a.pos { color: var(--pos); }
 .mn-tag.local-row { color: var(--pos); background: color-mix(in srgb, var(--pos) 12%, transparent); }
 .mn-imap .wz-input { height: 38px; padding: 0 8px; font-size: 13px; }
+
+/* switch finances:actual-budget (money#38): where the data is kept */
+.mn-tag.actual { color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.mn-actual { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.mn-actual > .mn-small { margin: 0; }
+.mn-actual-n { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.mn-actual-n li { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 12px; background: var(--solid-2); }
+.mn-actual-n b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.mn-actual-n small { color: var(--ink-3); font-size: 12px; }
+.mn-actual-bank { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line-2); }
+.mn-actual-bank .mn-small { margin: 0; }
+.mn-actual-token { display: flex; flex-direction: column; gap: 6px; }
+.mn-actual-err { color: var(--danger); }

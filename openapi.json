@@ -21,6 +21,9 @@
     "/api/manual/{id}/delete": {"post": {"summary": "Delete a manual account", "responses": {"200": {"description": "{ok}"}}}},
     "/api/import": {"post": {"summary": "Bring over categories (list of names, optional replace_categories) and rules ([{match, category, merchant?}]) from another money app", "responses": {"200": {"description": "{ok,rules_added}"}}}},
     "/api/source": {"post": {"summary": "Choose which bank-connection app to read ({source})", "responses": {"200": {"description": "overview"}}}},
+    "/api/actual/simplefin": {"post": {"summary": "Switch actual-budget: hand SimpleFIN to the bundled Actual Budget ({token}: a SimpleFIN setup token, or an access URL https://user:key@host/simplefin); bank data then comes through Actual", "responses": {"200": {"description": "overview"}}}},
+    "/api/actual/simplefin/forget": {"post": {"summary": "Switch actual-budget: stop SimpleFIN in Actual Budget (removes its SimpleFIN secrets); bank data comes from the SimpleFIN app again", "responses": {"200": {"description": "overview"}}}},
+    "/api/actual/copy": {"post": {"summary": "Switch actual-budget: copy into Actual Budget now (it also runs every minute and after each change)", "responses": {"200": {"description": "{copy, actual}"}}}},
     "/api/sync": {"post": {"summary": "Re-read the bank connection now", "responses": {"202": {"description": "overview"}}}},
     "/api/rules/{id}/delete": {"post": {"summary": "Delete a rule", "responses": {"200": {"description": "{ok}"}}}},
     "/mcp": {"post": {"summary": "MCP JSON-RPC (box-only): money_overview, money_transactions, money_spending, money_update", "responses": {"200": {"description": "JSON-RPC result"}}}}

@@ -94,6 +94,23 @@
           <p class="mn-small">Download a CSV, OFX or QFX file from your bank's website and pick it here. Importing the same file again skips what's already here.</p>
         </div>
         <div id="hist-sec"></div>
+        <div id="actual-sec" hidden>
+          <h3 class="mn-sec"><span class="mn-tag actual">Actual Budget</span> Where your money is kept</h3>
+          <div class="mn-bank mn-actual">
+            <p class="mn-small" id="actual-line"></p>
+            <ul class="mn-actual-n" id="actual-counts"></ul>
+            <div class="mn-actual-bank">
+              <b>Bank sync</b>
+              <p class="mn-small" id="actual-bank-line"></p>
+              <div id="actual-token" class="mn-actual-token" hidden>
+                <label class="mn-lab" for="actual-token-in">SimpleFIN setup token (or an access URL you already have)</label>
+                <input id="actual-token-in" class="wz-input" autocomplete="off" spellcheck="false" placeholder="Paste the token from SimpleFIN's Apps page">
+                <button type="button" class="mn-btn mn-go" id="actual-token-go">Let Actual Budget sync my banks</button>
+              </div>
+              <button type="button" class="mn-btn mn-sm" id="actual-forget" hidden>Stop bank sync in Actual Budget</button>
+            </div>
+          </div>
+        </div>
         <details class="mn-fold">
           <summary>Bank connection</summary>
           <div class="mn-set">
