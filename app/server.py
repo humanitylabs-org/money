@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
@@ -158,10 +159,10 @@ def sources(fresh=False):
     Checked in parallel and kept for a minute or two: an app that isn't installed takes seconds to fail its name
     lookup, and that must never sit in front of every screen tap. A background loop keeps it warm."""
     if not fresh and _SRC['list'] is not None and time.time() - _SRC['at'] < SRC_TTL:
-        return [dict(x) for x in _SRC['list']]
+        return _act_sources([dict(x) for x in _SRC['list']])
     with _SRC_LOCK:
         if not fresh and _SRC['list'] is not None and time.time() - _SRC['at'] < SRC_TTL:
-            return [dict(x) for x in _SRC['list']]
+            return _act_sources([dict(x) for x in _SRC['list']])
         out = [None] * len(SOURCES)
 
         def one(i, sid, base):
@@ -174,7 +175,20 @@ def sources(fresh=False):
         out = [o or {'id': sid, 'name': NAMES.get(sid, sid), 'installed': False, 'connected': False, 'banks': 0, 'last_sync': None}
                for o, (sid, _) in zip(out, SOURCES)]
         _SRC.update(at=time.time(), list=out)
-        return [dict(x) for x in out]
+    return _act_sources([dict(x) for x in out])
+
+
+def _act_sources(out):
+    """With SimpleFIN set up in Actual Budget (switch finances:actual-budget), the SimpleFIN entry is that one."""
+    try:
+        on = _act_bank_on()
+    except Exception:  # noqa: BLE001 - a broken switch file never hides the connections
+        on = False
+    if on:
+        for s in out:
+            if s['id'] == 'wizard-simplefin':
+                s.update(name=ACTUAL_NAME, installed=True, connected=True, banks=s['banks'] or 1, via='actual')
+    return out
 
 
 def _sources_loop():
@@ -207,7 +221,34 @@ def _num(v):
         return None
 
 
-def sync(source=None):
+def _fetch_source(source, base):
+    """A bank-connection app's accounts, health and transactions (paged newest -> oldest)."""
+    accts = _get(base, '/api/accounts').get('accounts') or []
+    # The connector's own view of each bank (signed out, errors). Best effort: older connectors may not answer.
+    try:
+        st = _get(base, '/api/status', timeout=10)
+        health = {'source': source, 'error': st.get('error') or st.get('last_error'),
+                  'banks': [{'institution': b.get('institution'), 'status': b.get('status'), 'error': b.get('error')}
+                            for b in st.get('banks') or []]}
+    except Problem:
+        health = None
+    # Page newest -> oldest by date (connectors return at most 1000 rows per call).
+    since = (dt.date.today() - dt.timedelta(days=HISTORY_DAYS)).isoformat()
+    rows, to, guard = {}, None, 0
+    while guard < 40:
+        q = {'limit': 1000, 'from': since, **({'to': to} if to else {})}
+        batch = _get(base, '/api/transactions', q, timeout=60).get('transactions') or []
+        new = [t for t in batch if t['id'] not in rows]
+        for t in new:
+            rows[t['id']] = t
+        guard += 1
+        if len(batch) < 1000 or not new:
+            break
+        to = min(t['date'] for t in batch if t.get('date'))
+    return accts, health, rows
+
+
+def sync(source=None, force=False):
     if not SYNC_LOCK.acquire(blocking=False):
         raise Problem(409, 'Already syncing.')
     SYNCING.set()
@@ -216,28 +257,21 @@ def sync(source=None):
         base = dict(SOURCES).get(source)
         if not base:
             raise Problem(400, 'Unknown bank connection.')
-        accts = _get(base, '/api/accounts').get('accounts') or []
-        # The connector's own view of each bank (signed out, errors). Best effort: older connectors may not answer.
-        try:
-            st = _get(base, '/api/status', timeout=10)
-            health = {'source': source, 'error': st.get('error') or st.get('last_error'),
-                      'banks': [{'institution': b.get('institution'), 'status': b.get('status'), 'error': b.get('error')}
-                                for b in st.get('banks') or []]}
-        except Problem:
-            health = None
-        # Page newest -> oldest by date (connectors return at most 1000 rows per call).
-        since = (dt.date.today() - dt.timedelta(days=HISTORY_DAYS)).isoformat()
-        rows, to, guard = {}, None, 0
-        while guard < 40:
-            q = {'limit': 1000, 'from': since, **({'to': to} if to else {})}
-            batch = _get(base, '/api/transactions', q, timeout=60).get('transactions') or []
-            new = [t for t in batch if t['id'] not in rows]
-            for t in new:
-                rows[t['id']] = t
-            guard += 1
-            if len(batch) < 1000 or not new:
-                break
-            to = min(t['date'] for t in batch if t.get('date'))
+        if source == 'wizard-simplefin' and _act_bank_on():
+            # switch finances:actual-budget with a SimpleFIN token in Actual: the bank data comes through Actual
+            c = db()
+            try:
+                got = _act_bank_fetch(c, force)
+                if got is None:   # Actual fetched from SimpleFIN recently; nothing new to ask for yet
+                    with c:
+                        _set(c, 'last_sync', _now())
+                        _set(c, 'last_error', None)
+                    return {'source': source, 'accounts': 0, 'transactions': 0, 'via': 'actual', 'fetched': False}
+            finally:
+                c.close()
+            accts, health, rows = got
+        else:
+            accts, health, rows = _fetch_source(source, base)
         now = _now()
         with LOCK:
             c = db()
@@ -297,12 +331,13 @@ def sync(source=None):
         SYNC_LOCK.release()
 
 
-def start_sync():
+def start_sync(force=False):
     def run():
         try:
-            sync()
+            sync(force=force)
         except Problem:
             pass
+        ACTUAL_KICK.set()
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -317,6 +352,7 @@ def _scheduler():
             age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.strptime(last, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc)).total_seconds() if last else 1e9
             if age > SYNC_MINUTES * 60 and not SYNCING.is_set():
                 sync()
+                ACTUAL_KICK.set()
                 networth()
                 check_alerts()
         except Exception:  # noqa: BLE001 - keep scheduling after a failed sync
@@ -1659,7 +1695,7 @@ def overview():
         hist = _setting(c, 'history')
         if hist:
             hist['showing'] = sum(1 for r in allrows if r['origin'] == 'import')
-        out = {'source': src, 'source_name': NAMES.get(src, src), 'sources': srcs, 'chosen': bool(_setting(c, 'source')),
+        out = {'source': src, 'source_name': next((s['name'] for s in srcs if s['id'] == src and s.get('via')), NAMES.get(src, src)), 'sources': srcs, 'chosen': bool(_setting(c, 'source')),
                'accounts': accts, 'hidden_accounts': hidden_accts, 'manual': manual_accounts(c), 'history': hist,
                'to_review': sum(1 for r in allrows if not r['reviewed']), 'transactions': len(allrows),
                'categories': cats, 'category_kinds': _kinds(c), 'category_groups': _groups(c),
@@ -1669,6 +1705,8 @@ def overview():
     finally:
         c.close()
     out['local_accounts'] = local_accounts()
+    if actual_on():
+        out['actual'] = actual_status()
     cash = sum(a['balance'] or 0 for a in accts if (a['type'] or '') in ('depository', 'checking', 'savings') or re.search(r'check|saving|ckg', (a['name'] or ''), re.I))
     out['cash'] = round(cash, 2)
     return out
@@ -2080,6 +2118,571 @@ def local_import(body):
 
 # ---------------- MCP ----------------
 
+# ---------------- Actual Budget (switch finances:actual-budget, money#38) ----------------
+# With the switch on, Finances keeps its data in the stock Actual Budget server bundled with the app (service
+# finances-actual, no port: reachable only from Finances on the app's own network). Every minute, and right after any
+# change, Finances copies what it shows into one Actual budget named "Finances": accounts (with their banks and
+# balances), every transaction it lists (category, payee, note, splits), categories under their headings and rules.
+# Changes made in Actual's own app (a transaction's category, payee or note, a renamed payee or category, a new
+# category, a deleted transaction) come back into Finances' edits. A pasted SimpleFIN setup token is handed to Actual,
+# and from then on SimpleFIN bank data comes through Actual's SimpleFIN sync instead of the SimpleFIN app, with the same
+# ids, so reviews, categories and notes stay on the same transactions. Finances' own database stays a full copy the
+# whole time: switching off goes straight back to it and the SimpleFIN app, with nothing lost.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import actual as _act   # noqa: E402  (app/actual.py: the sync client)
+
+ACTUAL = 'actual-budget'
+ACTUAL_URL = os.environ.get('MONEY_ACTUAL_URL', 'http://finances-actual:5006').strip()
+ACTUAL_SECONDS = float(os.environ.get('MONEY_ACTUAL_SECONDS', '60'))
+ACTUAL_BANK_HOURS = float(os.environ.get('MONEY_ACTUAL_BANK_HOURS', '4'))
+ACTUAL_BANK_DAILY = 12          # SimpleFIN requests a day through Actual (it disables tokens that keep going past ~24)
+ACTUAL_LOCK = threading.Lock()
+ACTUAL_KICK = threading.Event()
+ACTUAL_NAME = 'SimpleFIN in Actual Budget'
+ACTUAL_DEFAULT_CATS = {'Food', 'General', 'Bills', 'Bills (Flexible)', 'Savings'}   # a new Actual budget's examples
+ACTUAL_DEFAULT_GROUPS = {'Usual Expenses', 'Investments and Savings'}
+_ACTUAL = {}
+# What may be removed from Actual when Finances no longer has it (payees, banks and mappings stay, as Actual keeps them).
+_ACT_TOMB = ('tx:', 'sub:', 'start:', 'acct:', 'rule:', 'cat:', 'grp:')
+
+
+def _ac():
+    key = (ACTUAL_URL, str(DATA))
+    if key not in _ACTUAL:
+        _ACTUAL[key] = _act.Client(ACTUAL_URL, _private())
+    return _ACTUAL[key]
+
+
+def actual_on():
+    return switch_on(ACTUAL)
+
+
+def _need_actual():
+    if not actual_on():
+        raise Problem(409, 'Keeping Finances in Actual Budget is switched off.')
+
+
+def _act_bank_on():
+    return actual_on() and bool(_ac().state().get('bank_configured'))
+
+
+def _cents(v):
+    return int(round((v or 0) * 100))
+
+
+def _act_day(d):
+    try:
+        return int(str(d)[:10].replace('-', ''))
+    except ValueError:
+        return int(dt.date.today().strftime('%Y%m%d'))
+
+
+def _act_find(rows, name, **match):
+    want = (name or '').strip().lower()
+    for rid, r in rows.items():
+        if str(r.get('name') or '').strip().lower() == want and all(r.get(k) == v for k, v in match.items()):
+            return rid
+    return None
+
+
+def _act_links(m):
+    return {r['key']: (r['aid'], json.loads(r['sig'] or '{}')) for r in m.execute('SELECT key, aid, sig FROM link')}
+
+
+def _act_accounts(c):
+    """Finances' accounts as Actual accounts: [(akey, (source, id) list, row)]. An imported-history account and the live
+    one for the same card (bank word + last four) are one account in Actual, as they are one in Finances."""
+    src = active_source(c)
+    ex = _excluded(c)
+    out, at = [], {}
+    for a in c.execute('''SELECT * FROM accounts WHERE source IN (?, 'import', 'local')
+                          ORDER BY CASE source WHEN ? THEN 0 WHEN 'local' THEN 1 ELSE 2 END, institution, name''', (src, src)):
+        if _is_out(ex, a['institution'], a['name'], a['last_four']):
+            continue
+        k = _key(a['institution'], a['name'], a['last_four'])
+        akey = 'acct:k:' + ':'.join(str(x) for x in k) if k and a['source'] != 'local' else f"acct:{a['source']}|{a['id']}"
+        if akey in at:
+            at[akey][1].append((a['source'], a['id']))
+            continue
+        at[akey] = [akey, [(a['source'], a['id'])], dict(a), a['source'] == src]
+        out.append(at[akey])
+    return out
+
+
+def _act_plan(c, m):
+    """What Actual should hold (from what Finances shows) -> (messages, link rows to save, link keys to drop)."""
+    cl = _ac()
+    links = _act_links(m)
+    groups = cl.live(cl.rows(m, 'category_groups'))
+    cats = cl.live(cl.rows(m, 'categories'))
+    payees = cl.live(cl.rows(m, 'payees'))
+    want = {}
+
+    def ent(key, ds, fields, adopt=None, aid=None):
+        if key in want:
+            return want[key][1]
+        aid = aid or (links[key][0] if key in links else None) or (adopt() if adopt else None) or _act.uid(key)
+        want[key] = (ds, aid, fields)
+        return aid
+
+    # categories under their headings (a heading's kind decides income or not, as Actual keeps those apart)
+    gids = {}
+
+    def group(name, inc, pos):
+        gid = ent('grp:' + name, 'category_groups', {'name': name, 'is_income': int(inc), 'sort_order': pos * 16384, 'hidden': 0, 'tombstone': 0},
+                  adopt=lambda: _act_find(groups, name))
+        gids[name] = (gid, inc)
+        return gid
+
+    def category(name, gname, inc, pos):
+        cid = ent('cat:' + name, 'categories', {'name': name, 'cat_group': gids[gname][0], 'is_income': int(inc), 'sort_order': pos * 16384,
+                                                'hidden': 0, 'tombstone': 0}, adopt=lambda: _act_find(cats, name))
+        ent('cmap:' + name, 'category_mapping', {'transferId': cid}, aid=cid)
+        return cid
+
+    cid = {}
+    gl = _groups(c)
+    for gi, g in enumerate(gl):
+        group(g['group'], g['kind'] == 'income', gi + 1)
+        for ci, name in enumerate(g['categories']):
+            cid[name] = category(name, g['group'], g['kind'] == 'income', ci + 1)
+    inc_group = next((g['group'] for g in gl if g['kind'] == 'income'), None)
+    if not inc_group:
+        inc_group = 'Income'
+        group(inc_group, True, len(gl) + 1)
+    start_cat = category('Starting Balances', inc_group, True, 999)
+
+    def cat_id(name):
+        if not name:
+            return None
+        if name not in cid:   # a bank's own category Finances never listed: under Other
+            if 'Other' not in gids:
+                group('Other', False, len(gl) + 2)
+            cid[name] = category(name, 'Other', gids['Other'][1], len(cid) + 1)
+        return cid[name]
+
+    def payee(name):
+        name = (name or '').strip()[:120] or 'Unknown'
+        pid = ent('payee:' + name, 'payees', {'name': name, 'tombstone': 0},
+                  adopt=lambda: next((k for k, v in payees.items() if v.get('name') == name and not v.get('transfer_acct')), None))
+        ent('pmap:' + name, 'payee_mapping', {'targetId': pid}, aid=pid)
+        return pid
+
+    # banks and accounts
+    acct_of, sums, first, balance = {}, {}, {}, {}
+    for pos, (akey, members, a, live) in enumerate(_act_accounts(c), 1):
+        inst = a['institution'] or 'Other'
+        bid = ent('bank:' + inst, 'banks', {'bank_id': re.sub(r'[^a-z0-9]+', '-', inst.lower()).strip('-') or 'bank', 'name': inst, 'tombstone': 0})
+        f = {'name': a['name'] or inst, 'official_name': a['name'] or inst, 'bank': bid, 'offbudget': 0, 'closed': 0,
+             'sort_order': pos * 16384, 'tombstone': 0}
+        if a['source'] == 'wizard-simplefin':
+            f.update(account_id=a['id'], account_sync_source='simpleFin')
+        aid = ent(akey, 'accounts', f)
+        tp = ent('tpay:' + akey, 'payees', {'name': '', 'transfer_acct': aid, 'tombstone': 0})
+        ent('tpmap:' + akey, 'payee_mapping', {'targetId': tp}, aid=tp)
+        for s in members:
+            acct_of[s] = (akey, aid)
+        if live and a['balance'] is not None:
+            balance[akey] = _cents(a['balance'])
+
+    # transactions: everything Finances lists (hidden ones stay in Finances only, as they count nowhere)
+    view = transactions({'all': True, 'limit': 1}, c)['rows']
+    for r in view:
+        acc = acct_of.get((r['source'], r['account']))
+        if not acc:
+            continue
+        akey, aid = acc
+        key = f"tx:{r['source']}|{r['id']}"
+        pid = payee(r['merchant'] or r['description'])
+        parts = r.get('splits') or []
+        day = _act_day(r['date'])
+        order = int(hashlib.sha1(key.encode()).hexdigest()[:8], 16) / 1000
+        f = {'acct': aid, 'date': day, 'amount': _cents(r['amount']), 'description': pid,
+             'category': None if parts else cat_id(r['category']), 'notes': r.get('note') or None,
+             'financial_id': r['id'] if r['source'] == 'wizard-simplefin' else f"{r['source']}:{r['id']}",
+             'imported_description': (r.get('description') or '')[:200] or None, 'cleared': 0 if r.get('status') == 'pending' else 1,
+             'isParent': 1 if parts else 0, 'isChild': 0, 'starting_balance_flag': 0, 'sort_order': order, 'tombstone': 0}
+        tid = ent(key, 'transactions', f)
+        for i, p in enumerate(parts):
+            ent(f'sub:{key}:{i}', 'transactions', {'acct': aid, 'date': day, 'amount': _cents(p['amount']), 'description': pid,
+                                                   'category': cat_id(p['category']), 'notes': None, 'isParent': 0, 'isChild': 1,
+                                                   'parent_id': tid, 'cleared': f['cleared'], 'starting_balance_flag': 0,
+                                                   'sort_order': order - (i + 1) / 100, 'tombstone': 0})
+        sums[akey] = sums.get(akey, 0) + f['amount']
+        first[akey] = min(first.get(akey, day), day)
+    # a starting balance per bank account, so Actual's balance is the bank's (as Actual does when it links a bank)
+    for akey, bal in balance.items():
+        aid = want[akey][1]
+        ent('start:' + akey, 'transactions', {'acct': aid, 'date': first.get(akey, _act_day(dt.date.today().isoformat())),
+                                              'amount': bal - sums.get(akey, 0), 'description': payee('Starting Balance'),
+                                              'category': start_cat, 'notes': None, 'isParent': 0, 'isChild': 0,
+                                              'starting_balance_flag': 1, 'cleared': 1, 'sort_order': 0, 'tombstone': 0})
+
+    # rules: match text (Actual's "imported payee contains"), size range, category and payee. Days of the month and
+    # rule splits have no Actual equivalent: Finances keeps applying the whole rule itself.
+    kinds = _kinds(c)
+    for r in _rules(c):
+        side = {'inflow': True} if kinds.get(r['category'].lower()) == 'income' else {'outflow': True}
+        cond = [{'op': 'contains', 'field': 'imported_description', 'value': r['match'], 'type': 'string'}]
+        if r.get('min_abs') is not None:
+            cond.append({'op': 'gte', 'field': 'amount', 'value': _cents(r['min_abs']), 'options': side, 'type': 'number'})
+        if r.get('max_abs') is not None:
+            cond.append({'op': 'lte', 'field': 'amount', 'value': _cents(r['max_abs']), 'options': side, 'type': 'number'})
+        acts = [{'op': 'set', 'field': 'category', 'value': cat_id(r['category']), 'type': 'id'}]
+        if r.get('merchant'):
+            acts.append({'op': 'set', 'field': 'description', 'value': payee(r['merchant']), 'type': 'id'})
+        ent(f"rule:{r['id']}", 'rules', {'stage': None, 'conditions_op': 'and', 'conditions': json.dumps(cond),
+                                         'actions': json.dumps(acts), 'tombstone': 0})
+
+    msgs, save, drop = [], [], []
+    for key, (ds, aid, fields) in want.items():
+        old = links.get(key)
+        before = old[1].get('f', {}) if old and old[0] == aid else None
+        changed = [(ds, aid, col, v) for col, v in fields.items() if before is None or before.get(col) != v]
+        msgs += changed
+        if changed or not old or old[0] != aid:
+            save.append((key, aid, json.dumps({'ds': ds, 'f': fields})))
+    for key, (aid, sig) in links.items():
+        if key not in want and key.startswith(_ACT_TOMB):
+            msgs.append((sig.get('ds') or 'transactions', aid, 'tombstone', 1))
+            drop.append(key)
+    # a new budget's example categories go, once (anything made in Actual's app later is never removed)
+    st = cl.state()
+    if not st.get('defaults_done'):
+        mine = {v[1] for v in want.values()}
+        for rid, r in cats.items():
+            if r.get('name') in ACTUAL_DEFAULT_CATS and rid not in mine:
+                msgs.append(('categories', rid, 'tombstone', 1))
+        for rid, r in groups.items():
+            if r.get('name') in ACTUAL_DEFAULT_GROUPS and rid not in mine:
+                msgs.append(('category_groups', rid, 'tombstone', 1))
+    return msgs, save, drop
+
+
+def _act_cell(m, ds, row):
+    return {r['col']: _act.de(r['val']) for r in m.execute('SELECT col, val FROM cells WHERE ds=? AND row=?', (ds, row))}
+
+
+def _act_take(foreign):
+    """Changes made in Actual's own app -> Finances' edits. Returns how many transactions changed."""
+    if not foreign:
+        return 0
+    cl = _ac()
+    m = cl.mirror()
+    try:
+        links = _act_links(m)
+        by_aid = {aid: (k, sig) for k, (aid, sig) in links.items() if not k.startswith(('pmap:', 'cmap:', 'tpmap:', 'tpay:'))}
+        pmap = {k: v.get('targetId') for k, v in cl.rows(m, 'payee_mapping').items()}
+        cmap = {k: v.get('transferId') for k, v in cl.rows(m, 'category_mapping').items()}
+        payees, cats, groups = cl.rows(m, 'payees'), cl.rows(m, 'categories'), cl.rows(m, 'category_groups')
+        edits, renamed_payees, rekey = [], set(), []
+        c = db()
+        try:
+            have = {r[0] for r in c.execute('SELECT name FROM categories')}
+            for (ds, row), cols in foreign.items():
+                if ds == 'payees' and 'name' in cols and row in by_aid and by_aid[row][0].startswith('payee:'):
+                    renamed_payees.add(row)
+                elif ds == 'categories':
+                    cur = cats.get(row) or {}
+                    name = str(cur.get('name') or '').strip()[:60]
+                    if row in by_aid and by_aid[row][0].startswith('cat:'):
+                        old = by_aid[row][0][4:]
+                        if 'name' in cols and name and name != old and name not in have and not cur.get('tombstone'):
+                            with c:   # renamed in Actual: rename it here, with everything filed under it
+                                c.execute('UPDATE categories SET name=? WHERE name=?', (name, old))
+                                c.execute('UPDATE edits SET category=? WHERE category=?', (name, old))
+                                c.execute('UPDATE rules SET category=? WHERE category=?', (name, old))
+                            rekey.append(('cat:' + old, 'cat:' + name, row))
+                            rekey.append(('cmap:' + old, 'cmap:' + name, row))
+                            have.add(name)
+                    elif name and not cur.get('tombstone') and name not in have and name != 'Starting Balances':
+                        heading = str((groups.get(cur.get('cat_group')) or {}).get('name') or '').strip()[:60] or None
+                        with c:   # made in Actual: offer it in Finances too, under the same heading
+                            c.execute('INSERT OR IGNORE INTO categories(name,pos,kind,grp) VALUES (?, (SELECT COALESCE(MAX(pos),0)+1 FROM categories), ?, ?)',
+                                      (name, 'income' if cur.get('is_income') else None, heading))
+                        have.add(name)
+            for (ds, row), cols in foreign.items():
+                if ds != 'transactions' or row not in by_aid or not by_aid[row][0].startswith('tx:'):
+                    continue
+                key, sig = by_aid[row]
+                src, tid = key[3:].split('|', 1)
+                cur, f = _act_cell(m, 'transactions', row), sig.get('f', {})
+                ch = {}
+                if 'tombstone' in cols and cur.get('tombstone'):
+                    ch['hidden'] = True      # deleted in Actual: hidden here (bring it back with Unhide)
+                if 'category' in cols and cmap.get(cur.get('category'), cur.get('category')) != cmap.get(f.get('category'), f.get('category')) and not f.get('isParent'):
+                    cc = cats.get(cmap.get(cur.get('category'), cur.get('category'))) or {}
+                    ch['category'] = cc.get('name') if not cc.get('tombstone') else None
+                if 'description' in cols and pmap.get(cur.get('description'), cur.get('description')) != pmap.get(f.get('description'), f.get('description')):
+                    ch['merchant'] = (payees.get(pmap.get(cur.get('description'), cur.get('description'))) or {}).get('name') or None
+                if 'notes' in cols and (cur.get('notes') or None) != (f.get('notes') or None):
+                    ch['note'] = cur.get('notes') or None
+                if ch:
+                    edits.append((src, tid, ch))
+            for aid in renamed_payees:
+                name = str((payees.get(aid) or {}).get('name') or '').strip()[:60]
+                if not name:
+                    continue
+                for key, (taid, sig) in links.items():
+                    d = sig.get('f', {}).get('description')
+                    if key.startswith('tx:') and pmap.get(d, d) == aid:
+                        src, tid = key[3:].split('|', 1)
+                        edits.append((src, tid, {'merchant': name}))
+                old = by_aid[aid][0]
+                rekey.append((old, 'payee:' + name, aid))
+                rekey.append(('pmap:' + old[6:], 'pmap:' + name, aid))
+        finally:
+            c.close()
+        with m:
+            for old, new, aid in rekey:
+                r = m.execute('SELECT sig FROM link WHERE key=?', (old,)).fetchone()
+                m.execute('DELETE FROM link WHERE key=?', (old,))
+                m.execute('INSERT OR REPLACE INTO link VALUES (?,?,?)', (new, aid, r[0] if r else '{}'))
+    finally:
+        m.close()
+    n = 0
+    for src, tid, ch in edits:
+        try:
+            update({'source': src, 'id': tid, **ch})
+            n += 1
+        except Problem:
+            pass
+    return n
+
+
+def _act_counts(m):
+    cl = _ac()
+    tx = cl.live(cl.rows(m, 'transactions'))
+    return {'accounts': len([a for a in cl.live(cl.rows(m, 'accounts')).values() if not a.get('closed')]),
+            'transactions': len([t for t in tx.values() if not t.get('isChild') and not t.get('starting_balance_flag')]),
+            'categories': len([x for x in cl.live(cl.rows(m, 'categories')).values() if x.get('name') != 'Starting Balances']),
+            'rules': len(cl.live(cl.rows(m, 'rules')))}
+
+
+def _act_fingerprint(c):
+    """Changes whenever anything Finances would copy changes (rows, edits, rules, categories, accounts, settings)."""
+    q = '''SELECT (SELECT COUNT(*) || MAX(seen) || TOTAL(amount) FROM tx), (SELECT COUNT(*) || MAX(at) FROM edits),
+                  (SELECT COUNT(*) || MAX(id) FROM rules), (SELECT GROUP_CONCAT(name || COALESCE(kind,'') || COALESCE(grp,'') || pos, '|') FROM categories),
+                  (SELECT GROUP_CONCAT(source || id || COALESCE(name,'') || COALESCE(balance,''), '|') FROM accounts),
+                  (SELECT GROUP_CONCAT(k || COALESCE(v,''), '|') FROM settings WHERE k IN ('source','excluded','merged','import_keep','history'))'''
+    return hashlib.sha1(json.dumps(list(c.execute(q).fetchone())).encode()).hexdigest()
+
+
+def actual_copy():
+    """One round: take in Actual's changes, then copy Finances' current state into Actual. Never raises."""
+    if not actual_on():
+        return None
+    cl = _ac()
+    if not ACTUAL_LOCK.acquire(blocking=False):
+        return None
+    try:
+        st = cl.state()
+        try:
+            made = cl.ensure()
+            pending = {tuple(k.split('\x1f', 1)): set(v) for k, v in (st.pop('foreign', None) or {}).items()}
+            got = cl.sync()
+            for k, v in got.items():
+                pending.setdefault(k, set()).update(v)
+            took = _act_take(pending)
+            with LOCK:
+                c = db()
+                try:
+                    fp = _act_fingerprint(c)
+                    if not made and not pending and st.get('fp') == fp and st.get('ok_at'):
+                        msgs, save, drop = [], [], []   # nothing changed on either side since the last copy
+                    else:
+                        m = cl.mirror()
+                        try:
+                            msgs, save, drop = _act_plan(c, m)
+                        finally:
+                            m.close()
+                finally:
+                    c.close()
+            if msgs:
+                back = cl.sync(cl.stamp(msgs))
+                if back:
+                    st['foreign'] = {'\x1f'.join(k): sorted(v) for k, v in back.items()}
+            m = cl.mirror()
+            try:
+                with m:
+                    m.executemany('INSERT OR REPLACE INTO link VALUES (?,?,?)', save)
+                    m.executemany('DELETE FROM link WHERE key=?', [(k,) for k in drop])
+                counts = _act_counts(m)
+            finally:
+                m.close()
+            st.update(defaults_done=True, error=None, ok_at=_now(), counts=counts, sent=len(msgs), took=took, fp=fp,
+                      first_copy=st.get('first_copy') or (_now() if msgs else None))
+            cl.save()
+            return {'made': made, 'sent': len(msgs), 'took': took, 'counts': counts}
+        except _act.ActualError as e:
+            st.update(error=e.message, error_at=_now())
+            cl.save()
+            return {'error': e.message}
+    finally:
+        ACTUAL_LOCK.release()
+
+
+def _actual_loop():
+    while True:
+        ACTUAL_KICK.wait(ACTUAL_SECONDS)
+        ACTUAL_KICK.clear()
+        try:
+            actual_copy()
+        except Exception:  # noqa: BLE001 - keep copying after a bad round
+            pass
+
+
+def actual_status():
+    if not actual_on():
+        return None
+    st = _ac().state()
+    return {'on': True, 'ready': bool(st.get('ok_at')), 'last_copy': st.get('ok_at'), 'error': st.get('error'),
+            'counts': st.get('counts') or {}, 'budget': 'Finances',
+            'bank': {'configured': bool(st.get('bank_configured')), 'last_fetch': st.get('bank_at'),
+                     'accounts': st.get('bank_accounts'), 'error': st.get('bank_error')}}
+
+
+# ---- SimpleFIN through Actual Budget ----
+
+def _act_bank_count(cl, n=1):
+    st = cl.state()
+    day_ago = time.time() - 86400
+    recent = [t for t in st.get('bank_requests', []) if t > day_ago]
+    if len(recent) + n > ACTUAL_BANK_DAILY:
+        raise Problem(429, 'SimpleFIN allows only a few refreshes a day and Actual Budget has used them. It refreshes again on its own later.')
+    st['bank_requests'] = recent + [time.time()] * n
+    cl.save()
+
+
+def _act_bank_data(d):
+    d = (d or {}).get('data') or {}
+    if d.get('error_code'):
+        raise Problem(502, {'INVALID_ACCESS_TOKEN': 'SimpleFIN no longer accepts this connection. Paste a new setup token.',
+                            'SERVER_DOWN': "Actual Budget couldn't reach SimpleFIN. It tries again later."}.get(d['error_code'], _clean_reason(d)))
+    return d
+
+
+def _clean_reason(d):
+    return re.sub(r'<[^>]+>', '', str(d.get('reason') or 'SimpleFIN through Actual Budget failed.'))[:200]
+
+
+def actual_bank_connect(body):
+    """Hand SimpleFIN to Actual Budget: a setup token (Actual claims it and keeps the access key in its own secrets), or
+    an access URL the owner already has (https://user:key@host/simplefin, e.g. from another app)."""
+    _need_actual()
+    tok = re.sub(r'\s+', '', str(body.get('token') or ''))
+    access = tok if re.match(r'^https://[^\s/:@]+:[^\s/@]+@[^\s/]+/\S*$', tok) else None
+    if not access:
+        try:
+            import base64
+            url = base64.b64decode(tok + '=' * (-len(tok) % 4)).decode()
+        except (ValueError, UnicodeDecodeError):
+            url = ''
+        if not re.match(r'^https://[^\s/]+/\S+$', url):
+            raise Problem(400, "That doesn't look like a SimpleFIN setup token. Copy the whole token from SimpleFIN's Apps page.")
+    cl = _ac()
+    try:
+        cl.ensure()
+        cl.delete_secret('simplefin_accessKey')
+        if access:
+            cl.delete_secret('simplefin_token')
+            cl.post('/secret', {'name': 'simplefin_accessKey', 'value': access})
+        else:
+            cl.post('/secret', {'name': 'simplefin_token', 'value': tok})
+        _act_bank_count(cl)
+        try:
+            d = _act_bank_data(cl.post('/simplefin/accounts'))
+        except Problem:
+            cl.delete_secret('simplefin_accessKey' if access else 'simplefin_token')
+            raise
+    except _act.ActualError as e:
+        raise Problem(502, e.message) from None
+    st = cl.state()
+    st.update(bank_configured=True, bank_accounts=len(d.get('accounts') or []), bank_error=None, bank_at=None)
+    cl.save()
+    with LOCK:
+        c = db()
+        try:
+            with c:
+                _set(c, 'source', 'wizard-simplefin')
+                _set(c, 'last_sync', None)
+        finally:
+            c.close()
+    _SRC['at'] = 0.0
+    start_sync(force=True)
+    return overview()
+
+
+def actual_bank_forget():
+    _need_actual()
+    cl = _ac()
+    try:
+        cl.ensure()
+        cl.delete_secret('simplefin_accessKey')
+        cl.delete_secret('simplefin_token')
+    except _act.ActualError as e:
+        raise Problem(502, e.message) from None
+    st = cl.state()
+    for k in ('bank_configured', 'bank_accounts', 'bank_error', 'bank_at'):
+        st.pop(k, None)
+    cl.save()
+    _SRC['at'] = 0.0
+    return overview()
+
+
+def _act_bank_fetch(c, force=False):
+    """SimpleFIN data through Actual Budget, in the SimpleFIN app's shapes: (accounts, health, {id: tx}) or None when
+    the last fetch is recent enough (SimpleFIN refreshes banks about once a day and allows few requests)."""
+    cl = _ac()
+    st = cl.state()
+    last = st.get('bank_at')
+    age = (time.time() - dt.datetime.strptime(last, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=dt.timezone.utc).timestamp()) if last else 1e9
+    if age < (1800 if force else ACTUAL_BANK_HOURS * 3600):
+        return None
+    try:
+        cl.ensure()
+        _act_bank_count(cl, 2)
+        raw = _act_bank_data(cl.post('/simplefin/accounts')).get('accounts') or []
+        newest = c.execute("SELECT MAX(date) FROM tx WHERE source='wizard-simplefin' AND status='posted'").fetchone()[0]
+        start = (dt.date.today() - dt.timedelta(days=90)).isoformat() if not newest else \
+            max(dt.date.fromisoformat(newest) - dt.timedelta(days=14), dt.date.today() - dt.timedelta(days=90)).isoformat()
+        ids = [str(a['id']) for a in raw if a.get('id')]
+        got = _act_bank_data(cl.post('/simplefin/transactions', {'accountId': ids, 'startDate': [start] * len(ids)})) if ids else {}
+    except _act.ActualError as e:
+        st.update(bank_error=e.message)
+        cl.save()
+        raise Problem(502, e.message) from None
+    accts, rows, problems = [], {}, []
+    for a in raw:
+        org = a.get('org') or {}
+        name = str(a.get('name') or '')[:120]
+        m4 = re.search(r'(\d{4,5})\D*$', name)
+        try:
+            bal = round(float(a.get('balance')), 2)
+        except (TypeError, ValueError):
+            bal = None
+        when = a.get('balance-date')
+        accts.append({'id': str(a['id']), 'institution': org.get('name') or org.get('domain'), 'name': name,
+                      'last_four': m4.group(1) if m4 else None, 'currency': a.get('currency') if re.fullmatch(r'[A-Z]{3}', str(a.get('currency') or '')) else 'USD',
+                      'balance': bal, 'balance_at': dt.datetime.fromtimestamp(int(when), dt.timezone.utc).strftime('%Y-%m-%d') if when else None})
+        one = got.get(str(a['id'])) or {}
+        for t in ((one.get('transactions') or {}).get('all') or []):
+            try:
+                amt = round(float((t.get('transactionAmount') or {}).get('amount')), 2)
+            except (TypeError, ValueError):
+                continue
+            rows[str(t['transactionId'])] = {'id': str(t['transactionId']), 'account': str(a['id']), 'date': t.get('transactedDate') or t.get('date'),
+                                             'amount': amt, 'description': str(t.get('notes') or '')[:200], 'counterparty': t.get('payeeName') or None,
+                                             'status': 'posted' if t.get('booked') else 'pending'}
+    for aid, errs in (got.get('errors') or {}).items():
+        for e in errs or []:
+            problems.append({'institution': next((x['institution'] for x in accts if x['id'] == aid), None), 'status': 'error',
+                             'error': _clean_reason(e)})
+    st.update(bank_at=_now(), bank_error=None, bank_accounts=len(accts))
+    cl.save()
+    return accts, {'source': 'wizard-simplefin', 'error': None, 'banks': problems}, rows
+
+
 TOOLS = [
     {'name': 'money_categories', 'description': "Change the owner's categories in Finances only (never the bank or Monarch): action add (name, kind?), kind (name, kind = expense/income/transfer), group (name, group heading, optional position for order), merge (name into another: every transaction and rule moves, the old one disappears), delete (unused only). Only when the owner asked.",
      'inputSchema': {'type': 'object', 'properties': {'action': {'type': 'string', 'enum': ['add', 'kind', 'group', 'merge', 'delete']}, 'name': {'type': 'string'}, 'group': {'type': 'string'}, 'position': {'type': 'integer'},
@@ -2307,9 +2910,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, import_setup(b))
             if path == '/api/source':
                 return self.send(200, set_source(b))
+            if path == '/api/actual/simplefin':
+                return self.send(200, actual_bank_connect(b))
+            if path == '/api/actual/simplefin/forget':
+                return self.send(200, actual_bank_forget())
+            if path == '/api/actual/copy':
+                _need_actual()
+                return self.send(200, {'copy': actual_copy(), 'actual': actual_status()})
             if path == '/api/sync':
                 if not SYNCING.is_set():
-                    start_sync()
+                    start_sync(force=True)
                 time.sleep(0.2)
                 return self.send(202, overview())
             m = re.fullmatch(r'/api/rules/(\d{1,9})/delete', path)
@@ -2320,6 +2930,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(e.code, {'error': e.message})
         except (ValueError, TypeError):
             self.send(400, {'error': 'Invalid request.'})
+        finally:
+            ACTUAL_KICK.set()   # switch finances:actual-budget: copy a change into Actual within moments
 
     def log_message(self, *a):
         pass
@@ -2340,7 +2952,14 @@ import threading as _sw_threading
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = []
+SWITCHES = [
+    {'id': 'actual-budget', 'name': 'Keep Finances in Actual Budget',
+     'description': "Your accounts, transactions, categories and rules are kept in Actual Budget, the open-source budgeting "
+                    "app bundled with Finances, and SimpleFIN bank sync can run through Actual. Finances' screens and your "
+                    "agent's Finances tools work the same. Off: Finances uses its own database and the SimpleFIN app again, "
+                    "with nothing lost.",
+     'default': False, 'issues': ['humanitylabs-org/money#38']},
+]
 RETIRED_SWITCHES = {'offline-import'}   # now on for everyone (#29); its stored value is cleared at start
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
@@ -2499,4 +3118,5 @@ if __name__ == '__main__':
     _sw_forget_retired()
     threading.Thread(target=_sources_loop, daemon=True).start()
     threading.Thread(target=_scheduler, daemon=True).start()
+    threading.Thread(target=_actual_loop, daemon=True).start()
     ThreadingHTTPServer((os.environ.get('BIND', '0.0.0.0'), int(PORT)), Handler).serve_forever()
