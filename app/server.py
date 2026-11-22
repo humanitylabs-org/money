@@ -26,7 +26,7 @@ DATA = Path(os.environ.get('DATA_DIR', ROOT / '.data'))
 APP_ID = 'finances'
 # The app was Money (id money, at /money/) until 0.16.10 (money#28): old links and bookmarks still land here.
 OLD_IDS = ('money',)
-VERSION = '0.16.12'
+VERSION = '0.16.13'
 PREFIX = '/' + APP_ID
 PORT = os.environ.get('PORT', '8809')
 SYNC_MINUTES = float(os.environ.get('MONEY_SYNC_MINUTES', '30'))
