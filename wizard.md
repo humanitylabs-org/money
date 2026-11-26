@@ -7,6 +7,7 @@ type: view
 category: app
 version: 0.16.14
 summary: Review transactions, set categories and rules, and see spending and net worth over your bank connection.
+personal_data: reads your bank accounts and spending   # holds the owner's personal data (wizard-os spec/WIZARD_MD.md "Personal data"); a label only
 tags: [finance]
 license: GPL-3.0-only
 source: https://github.com/oscarhenrycollins/money
