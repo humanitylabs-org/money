@@ -179,10 +179,10 @@ def sources(fresh=False):
 
 
 def _act_sources(out):
-    """With SimpleFIN set up in Actual Budget (switch finances:actual-budget), the SimpleFIN entry is that one."""
+    """With SimpleFIN set up in Actual Budget, the SimpleFIN entry is that one."""
     try:
         on = _act_bank_on()
-    except Exception:  # noqa: BLE001 - a broken switch file never hides the connections
+    except Exception:  # noqa: BLE001 - a broken Actual state file never hides the connections
         on = False
     if on:
         for s in out:
@@ -258,7 +258,7 @@ def sync(source=None, force=False):
         if not base:
             raise Problem(400, 'Unknown bank connection.')
         if source == 'wizard-simplefin' and _act_bank_on():
-            # switch finances:actual-budget with a SimpleFIN token in Actual: the bank data comes through Actual
+            # with a SimpleFIN token in Actual: the bank data comes through Actual
             c = db()
             try:
                 got = _act_bank_fetch(c, force)
@@ -1705,8 +1705,7 @@ def overview():
     finally:
         c.close()
     out['local_accounts'] = local_accounts()
-    if actual_on():
-        out['actual'] = actual_status()
+    out['actual'] = actual_status()
     cash = sum(a['balance'] or 0 for a in accts if (a['type'] or '') in ('depository', 'checking', 'savings') or re.search(r'check|saving|ckg', (a['name'] or ''), re.I))
     out['cash'] = round(cash, 2)
     return out
@@ -2118,8 +2117,8 @@ def local_import(body):
 
 # ---------------- MCP ----------------
 
-# ---------------- Actual Budget (switch finances:actual-budget, money#38) ----------------
-# With the switch on, Finances keeps its data in the stock Actual Budget server bundled with the app (service
+# ---------------- Actual Budget (money#38, on for everyone) ----------------
+# Finances keeps its data in the stock Actual Budget server bundled with the app (service
 # finances-actual, no port: reachable only from Finances on the app's own network). Every minute, and right after any
 # change, Finances copies what it shows into one Actual budget named "Finances": accounts (with their banks and
 # balances), every transaction it lists (category, payee, note, splits), categories under their headings and rules.
@@ -2127,11 +2126,10 @@ def local_import(body):
 # category, a deleted transaction) come back into Finances' edits. A pasted SimpleFIN setup token is handed to Actual,
 # and from then on SimpleFIN bank data comes through Actual's SimpleFIN sync instead of the SimpleFIN app, with the same
 # ids, so reviews, categories and notes stay on the same transactions. Finances' own database stays a full copy the
-# whole time: switching off goes straight back to it and the SimpleFIN app, with nothing lost.
+# whole time, and forgetting the SimpleFIN token in Actual goes straight back to the SimpleFIN app, with nothing lost.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import actual as _act   # noqa: E402  (app/actual.py: the sync client)
 
-ACTUAL = 'actual-budget'
 ACTUAL_URL = os.environ.get('MONEY_ACTUAL_URL', 'http://finances-actual:5006').strip()
 ACTUAL_SECONDS = float(os.environ.get('MONEY_ACTUAL_SECONDS', '60'))
 ACTUAL_BANK_HOURS = float(os.environ.get('MONEY_ACTUAL_BANK_HOURS', '4'))
@@ -2153,17 +2151,8 @@ def _ac():
     return _ACTUAL[key]
 
 
-def actual_on():
-    return switch_on(ACTUAL)
-
-
-def _need_actual():
-    if not actual_on():
-        raise Problem(409, 'Keeping Finances in Actual Budget is switched off.')
-
-
 def _act_bank_on():
-    return actual_on() and bool(_ac().state().get('bank_configured'))
+    return bool(_ac().state().get('bank_configured'))
 
 
 def _cents(v):
@@ -2470,8 +2459,6 @@ def _act_fingerprint(c):
 
 def actual_copy():
     """One round: take in Actual's changes, then copy Finances' current state into Actual. Never raises."""
-    if not actual_on():
-        return None
     cl = _ac()
     if not ACTUAL_LOCK.acquire(blocking=False):
         return None
@@ -2533,8 +2520,6 @@ def _actual_loop():
 
 
 def actual_status():
-    if not actual_on():
-        return None
     st = _ac().state()
     return {'on': True, 'ready': bool(st.get('ok_at')), 'last_copy': st.get('ok_at'), 'error': st.get('error'),
             'counts': st.get('counts') or {}, 'budget': 'Finances',
@@ -2569,7 +2554,6 @@ def _clean_reason(d):
 def actual_bank_connect(body):
     """Hand SimpleFIN to Actual Budget: a setup token (Actual claims it and keeps the access key in its own secrets), or
     an access URL the owner already has (https://user:key@host/simplefin, e.g. from another app)."""
-    _need_actual()
     tok = re.sub(r'\s+', '', str(body.get('token') or ''))
     access = tok if re.match(r'^https://[^\s/:@]+:[^\s/@]+@[^\s/]+/\S*$', tok) else None
     if not access:
@@ -2614,7 +2598,6 @@ def actual_bank_connect(body):
 
 
 def actual_bank_forget():
-    _need_actual()
     cl = _ac()
     try:
         cl.ensure()
@@ -2915,7 +2898,6 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/actual/simplefin/forget':
                 return self.send(200, actual_bank_forget())
             if path == '/api/actual/copy':
-                _need_actual()
                 return self.send(200, {'copy': actual_copy(), 'actual': actual_status()})
             if path == '/api/sync':
                 if not SYNCING.is_set():
@@ -2931,7 +2913,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             self.send(400, {'error': 'Invalid request.'})
         finally:
-            ACTUAL_KICK.set()   # switch finances:actual-budget: copy a change into Actual within moments
+            ACTUAL_KICK.set()   # copy a change into Actual within moments
 
     def log_message(self, *a):
         pass
@@ -2952,15 +2934,8 @@ import threading as _sw_threading
 from pathlib import Path as _SwPath
 from urllib.parse import urlsplit as _sw_urlsplit
 
-SWITCHES = [
-    {'id': 'actual-budget', 'name': 'Keep Finances in Actual Budget',
-     'description': "Your accounts, transactions, categories and rules are kept in Actual Budget, the open-source budgeting "
-                    "app bundled with Finances, and SimpleFIN bank sync can run through Actual. Finances' screens and your "
-                    "agent's Finances tools work the same. Off: Finances uses its own database and the SimpleFIN app again, "
-                    "with nothing lost.",
-     'default': False, 'issues': ['humanitylabs-org/money#38']},
-]
-RETIRED_SWITCHES = {'offline-import'}   # now on for everyone (#29); its stored value is cleared at start
+SWITCHES = []
+RETIRED_SWITCHES = {'offline-import', 'actual-budget'}   # now on for everyone (#29, #38); stored values are cleared at start
 _SW_CONTRACT = 'wizard.app-switches/1'
 _SW_ROUTE = _sw_re.compile(r'(?:/[a-z0-9][a-z0-9-]{0,62})?/api/switches/?')
 _SW_LOCAL = {'localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'}

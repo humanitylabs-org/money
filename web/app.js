@@ -783,7 +783,7 @@ function renderAccounts() {
   }
   if (!ov.rules.length) rl.append(h('li', 'mn-small', 'No rules yet. Tick “Always use this” when you categorize something.'));
 }
-/* ---------- Actual Budget (switch finances:actual-budget) ---------- */
+/* ---------- Actual Budget (money#38) ---------- */
 function renderActual() {
   const a = ov.actual; el('actual-sec').hidden = !a;
   if (!a) return;
