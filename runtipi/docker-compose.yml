@@ -20,7 +20,7 @@ services:
       MONEY_ALERT_LARGE: ${MONEY_ALERT_LARGE:-500}
       WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
       WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
-      # Actual Budget, bundled below (switch finances:actual-budget, money#38).
+      # Actual Budget, bundled below (money#38).
       MONEY_ACTUAL_URL: http://finances-actual:5006
     working_dir: /app
     volumes:
@@ -33,7 +33,7 @@ services:
       is_main: true
       internal_port: 8809
   # Stock Actual Budget server (official image, pinned, no fork). No port: only Finances reaches it, on this app's
-  # own network. Finances uses it only while the switch finances:actual-budget is on; its data sits beside Finances'.
+  # own network. Finances keeps its data in it (money#38); its data sits beside Finances'.
   finances-actual:
     image: actualbudget/actual-server:26.11.0@sha256:06cf186569cf58d93e12659ff1a517b65b5b0ebee7050a3991d4bd8a1d398da6
     pids_limit: 128

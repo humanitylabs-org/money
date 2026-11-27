@@ -1,4 +1,4 @@
-"""Finances kept in Actual Budget (switch actual-budget, money#38), against a fake Actual server that speaks the same
+"""Finances kept in Actual Budget (money#38, on for everyone), against a fake Actual server that speaks the same
 sync protocol (protobuf messages, budget file upload/download, SimpleFIN endpoints). The real server image was tried
 by hand with Actual's own @actual-app/api reading the budget back; see the PR."""
 import datetime as dt
@@ -181,26 +181,27 @@ class ActualBudgetTests(unittest.TestCase):
         m.update({'source': 'wizard-simplefin', 'id': 'T1', 'category': 'Groceries', 'note': 'weekly shop', 'reviewed': True})
         m.update({'source': 'wizard-simplefin', 'id': 'T3', 'splits': [{'category': 'Groceries', 'amount': 80}, {'category': 'Household', 'amount': 40}]})
         m.update({'source': 'wizard-simplefin', 'id': 'T4', 'hidden': True})
-        self.switch(True)
 
     def tearDown(self):
         self.fake.close()
         self.tmp.cleanup()
 
-    def switch(self, on):
-        Path(self.tmp.name, 'switches.json').write_text(json.dumps({'actual-budget': on}))
-
     def tx_by_import(self, st):
         return {t.get('financial_id'): t for t in st.get('transactions', {}).values() if t.get('financial_id')}
 
-    def test_off_by_default_and_off_touches_nothing(self):
-        Path(self.tmp.name, 'switches.json').unlink()
-        self.assertEqual([s['on'] for s in self.m.switches_doc()['switches'] if s['id'] == 'actual-budget'], [False])
-        self.assertIsNone(self.m.actual_copy())
-        self.assertNotIn('actual', self.m.overview())
-        self.assertEqual(self.fake.calls, [])
-        with self.assertRaises(self.m.Problem):
-            self.m.actual_bank_connect({'token': 'https://u:p@bridge.example/simplefin'})
+    def test_on_for_everyone_with_no_switch(self):
+        self.assertNotIn('actual-budget', [x['id'] for x in self.m.switches_doc()['switches']])
+        self.assertIn('actual', self.m.overview())
+        self.assertIsNotNone(self.m.actual_copy())
+        self.assertTrue(self.fake.calls)
+
+    def test_stored_switch_off_is_ignored_and_cleared(self):
+        f = Path(self.tmp.name, 'switches.json')
+        f.write_text(json.dumps({'actual-budget': False, 'other': True}))
+        self.assertNotIn('actual-budget', [x['id'] for x in self.m.switches_doc()['switches']])
+        self.assertTrue(self.m.actual_copy()['counts'])
+        self.m._sw_forget_retired()
+        self.assertEqual(json.loads(f.read_text()), {'other': True})
 
     def test_everything_finances_shows_is_copied_once(self):
         r = self.m.actual_copy()
@@ -274,20 +275,6 @@ class ActualBudgetTests(unittest.TestCase):
         t1 = st['transactions'][tx['T1']]
         self.assertEqual((st['categories'][t1['category']]['name'], t1['notes']), ('Shopping', 'changed in Actual'))
         self.assertNotIn(tx['T2'], st['transactions'])
-
-    def test_off_again_keeps_everything(self):
-        self.m.actual_copy()
-        st = self.fake.state()
-        tx = {v.get('financial_id'): k for k, v in st['transactions'].items()}
-        self.fake.edit('transactions', tx['T1'], 'notes', 'from Actual')
-        self.m.actual_copy()
-        before = self.m.transactions({'all': True, 'limit': 1})['rows']
-        self.switch(False)
-        n = len(self.fake.calls)
-        self.assertIsNone(self.m.actual_copy())
-        self.assertEqual(len(self.fake.calls), n)
-        self.assertEqual(self.m.transactions({'all': True, 'limit': 1})['rows'], before)
-        self.assertEqual(next(r for r in before if r['id'] == 'T1')['note'], 'from Actual')
 
     def test_simplefin_through_actual_keeps_the_same_transactions(self):
         self.m.actual_copy()
